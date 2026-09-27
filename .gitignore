@@ -1,0 +1,43 @@
+# Planning artifacts (kept local, never committed)
+plan.md
+decisions.md
+
+# C++ / CMake build output
+build/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+*.user
+.vs/
+
+# Python environments and caches
+.venv/
+worker/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Model weights and downloaded artifacts
+models/
+*.th
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# Generated audio, caches, and logs
+cache/
+logs/
+*.log
+spikes/output/
+testdata/generated/
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
