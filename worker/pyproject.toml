@@ -1,0 +1,93 @@
+[project]
+name = "snds-worker"
+version = "0.1.0"
+description = "SNDS offline preparation worker: pinned htdemucs separation, BPM analysis, stem normalization."
+readme = { text = "Short-lived SNDS preparation worker. See docs/spikes.md.", content-type = "text/plain" }
+license = "MIT"
+requires-python = "==3.12.*"
+# Runtime dependencies shared by every compute flavour. Everything is pinned exactly;
+# transitive pins live in uv.lock. PyTorch and Demucs are deliberately NOT listed here:
+# they are only installed through exactly one of the mutually exclusive `cpu` / `cuda`
+# extras, so a bare `uv sync` can never pull an unintended PyTorch build from PyPI.
+dependencies = [
+  "numpy==2.5.3",
+  "scipy==1.18.1",
+  "soundfile==0.14.0",
+]
+
+[project.optional-dependencies]
+# Pick exactly one: `uv sync --extra cpu` or `uv sync --extra cuda`.
+# Both select the same PyTorch release; only the wheel build (index) differs.
+# The CUDA build still runs on CPU, so one venv per machine is enough.
+cpu = [
+  "torch==2.11.0",
+  "demucs==4.1.0",
+]
+cuda = [
+  "torch==2.11.0",
+  "demucs==4.1.0",
+]
+
+[project.scripts]
+snds-worker = "snds_worker.__main__:main"
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "ruff==0.16.9",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.6,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv]
+required-version = ">=0.12.6"
+# Always use a uv-managed CPython (exact patch in .python-version) so a clean machine needs
+# no system Python and never picks up Microsoft Store / ad-hoc interpreters.
+python-preference = "only-managed"
+# Windows 11 x64 is the only supported platform; keep the lock focused on it.
+environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cuda" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu128", extra = "cuda" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+# CUDA 12.8 runtime is bundled inside the Windows wheel; needs an NVIDIA R570+ driver.
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+markers = [
+  "model: needs the pinned htdemucs checkpoint on disk (skipped when absent)",
+  "cuda: needs a working CUDA device (skipped when absent)",
+]
