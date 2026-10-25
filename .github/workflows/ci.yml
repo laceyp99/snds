@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Windows Debug / CPU
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Check out source
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv and dependency cache
+        id: uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: '0.12.6'
+          enable-cache: true
+          cache-dependency-glob: |
+            worker/uv.lock
+            worker/pyproject.toml
+            worker/.python-version
+            scripts/_common.ps1
+
+      - name: Bootstrap CPU worker
+        id: bootstrap
+        if: ${{ !cancelled() && steps.uv.outcome == 'success' }}
+        run: .\scripts\bootstrap.ps1 -Compute cpu
+
+      - name: Build Debug app and C++ tests
+        id: build
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        run: .\scripts\build.ps1 -Config Debug -Target snds_app,snds_tests
+
+      - name: Test C++
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: .\scripts\test.ps1 -Config Debug -SkipPython
+
+      - name: Test Python
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: .\scripts\test.ps1 -SkipCpp
+
+      - name: Lint C++
+        if: ${{ !cancelled() && steps.uv.outcome == 'success' }}
+        run: .\scripts\lint.ps1 -SkipPython
+
+      - name: Lint Python
+        if: ${{ !cancelled() && steps.bootstrap.outcome == 'success' }}
+        run: .\scripts\lint.ps1 -SkipCpp
