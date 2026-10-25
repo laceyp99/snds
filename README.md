@@ -27,7 +27,7 @@ Bootstrap installs the pinned Python environment. Use `-Compute cuda` for a supp
 
 See [foundation spike results](docs/spikes.md) for technical decisions, measurements, and known limitations.
 
-CI builds the Debug app and C++ tests, runs C++ and Python tests, and checks formatting on Windows with CPU dependencies. Before distributing binaries, follow the [release checks](docs/releases.md).
+CI builds the Debug app and C++ tests, runs C++ and Python tests, and checks formatting on Windows with CPU dependencies.
 
 ## License
 
