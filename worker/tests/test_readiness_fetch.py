@@ -122,14 +122,22 @@ def test_readiness_cuda_probe_failure_falls_back(data_root: Path) -> None:
 
 
 class _Server:
-    def __init__(self, payload: bytes, status: int = 200) -> None:
+    """Serves ``payload``; the first ``short`` responses send only half of it, then close."""
+
+    def __init__(self, payload: bytes, status: int = 200, short: int = 0) -> None:
         payload_ = payload
+        remaining_short = [short]
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 self.send_response(status)
                 self.send_header("Content-Length", str(len(payload_)))
                 self.end_headers()
+                if remaining_short[0] > 0:
+                    remaining_short[0] -= 1
+                    self.wfile.write(payload_[: len(payload_) // 2])
+                    self.close_connection = True
+                    return
                 self.wfile.write(payload_)
 
             def log_message(self, *args) -> None:
@@ -166,6 +174,26 @@ def test_download_verifies_and_renames_atomically(tmp_path: Path) -> None:
             )
         assert ei.value.code == ErrorCode.MODEL_DOWNLOAD_FAILED
         assert sorted(p.name for p in tmp_path.iterdir()) == ["m.th"]  # no .part, no target
+    finally:
+        srv.close()
+
+
+def test_download_retries_a_truncated_response(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("snds_worker.model.time.sleep", lambda _s: None)
+    payload = b"y" * 1_000_000
+    srv = _Server(payload, short=1)
+    try:
+        target = tmp_path / "m.th"
+        info = download_file(
+            srv.url,
+            target,
+            expected_size=len(payload),
+            expected_sha256=hashlib.sha256(payload).hexdigest(),
+        )
+        assert info["attempts"] == 2 and target.read_bytes() == payload
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["m.th"]
     finally:
         srv.close()
 

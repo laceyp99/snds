@@ -10,6 +10,7 @@ Never uses torch.hub or the Hugging Face cache. Layout (below the SNDS data root
 from __future__ import annotations
 
 import hashlib
+import http.client
 import io
 import json
 import logging
@@ -308,23 +309,26 @@ def download_file(
         except JobCancelled:
             part.unlink(missing_ok=True)
             raise
-        except (urllib.error.URLError, OSError, TimeoutError) as exc:
-            part.unlink(missing_ok=True)
+        except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError) as exc:
             last_error = f"{type(exc).__name__}: {exc}"
-            log.warning("download attempt %d/%d failed: %s", attempt, attempts, last_error)
-            if attempt < attempts:
-                time.sleep(min(2.0 * attempt, 5.0))
-            continue
-        digest = h.hexdigest()
-        if size != expected_size or digest != expected_sha256:
-            part.unlink(missing_ok=True)
-            raise WorkerError(
-                ErrorCode.MODEL_DOWNLOAD_FAILED,
-                "The downloaded file does not match the pinned size/SHA-256; it was discarded.",
-                {"url": url, "size": size, "sha256": digest},
-            )
-        os.replace(part, target)
-        return {"size": size, "sha256": digest, "attempts": attempt, "http": headers}
+        else:
+            digest = h.hexdigest()
+            if size == expected_size and digest == expected_sha256:
+                os.replace(part, target)
+                return {"size": size, "sha256": digest, "attempts": attempt, "http": headers}
+            if size >= expected_size:
+                part.unlink(missing_ok=True)
+                raise WorkerError(
+                    ErrorCode.MODEL_DOWNLOAD_FAILED,
+                    "The downloaded file does not match the pinned size/SHA-256; it was discarded.",
+                    {"url": url, "size": size, "sha256": digest},
+                )
+            # A short body means the connection closed early: retry like any network error.
+            last_error = f"connection closed after {size} of {expected_size} bytes"
+        part.unlink(missing_ok=True)
+        log.warning("download attempt %d/%d failed: %s", attempt, attempts, last_error)
+        if attempt < attempts:
+            time.sleep(min(2.0 * attempt, 5.0))
     raise WorkerError(
         ErrorCode.MODEL_DOWNLOAD_FAILED,
         f"Downloading the model failed after {attempts} attempts: {last_error}",
