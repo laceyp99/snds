@@ -222,8 +222,9 @@ ReadinessReport LocalReadinessProbe::run()
         else
         {
             check.detail = environment.modelsDirectory.getFullPathName() + " does not exist yet.";
-            check.action = juce::String ("The pinned separation model will be installed here by ") + bootstrapCommand
-                           + " once model download is enabled. Separation stays unavailable until then.";
+            check.action =
+                juce::String ("Run ") + bootstrapCommand
+                + " to download and verify the pinned separation model. Separation stays unavailable until then.";
         }
 
         report.checks.push_back (check);

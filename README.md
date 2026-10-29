@@ -2,7 +2,7 @@
 
 A local visual stem-remix instrument for Windows. SNDS is being built to split a song into vocals, drums, bass, and other, then let you mix those stems alongside reactive artwork.
 
-**Early development.** The current app includes setup checks, logging, and placeholder import/player screens. Song import, stem mixing, and reactive visuals are still in development. Separation and audio-analysis prototypes live in `spikes/`.
+**Early development.** The current app includes setup checks, logging, and song import with artwork selection; the Python worker can separate a song into cached stems from its command line. Connecting the app to the worker, stem mixing, and reactive visuals are still in development. Separation and audio-analysis prototypes live in `spikes/`.
 
 ## Development
 
