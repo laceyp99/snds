@@ -97,10 +97,56 @@ function Test-WorkerEnvironment {
     }
 }
 
-# Phase 2: download the pinned htdemucs checkpoint into <data root>\models and verify its SHA256.
+# Installs the pinned htdemucs checkpoint into <data root>\models\htdemucs through the worker
+# ("python -m snds_worker fetch-model"): streamed download, SHA256 verification, atomic rename.
+# Idempotent: when the model is already installed it is only re-verified.
 function Install-SeparationModel {
-    $modelsDir = Join-Path (Get-SndsDataRoot) 'models'
-    Write-SndsWarning "Model installation is not implemented yet. The pinned separation model will be installed into $modelsDir; separation stays unavailable until then."
+    $dataRoot = Get-SndsDataRoot
+    if ($dataRoot.Length -gt 3) {
+        $dataRoot = $dataRoot.TrimEnd('\')
+    }
+    Write-SndsStep "Installing the pinned separation model into $(Join-Path $dataRoot 'models\htdemucs')"
+    $arguments = @('-u', '-X', 'utf8', '-m', 'snds_worker', 'fetch-model', '--protocol-version', '1', '--data-root', $dataRoot)
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # stdout carries the worker's NDJSON protocol lines; its stderr log goes straight to the console.
+        $lines = @(& $SndsWorkerPython @arguments)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+    }
+    $terminal = $null
+    foreach ($line in $lines) {
+        $text = "$line".Trim()
+        if (-not $text.StartsWith('{')) {
+            continue
+        }
+        try {
+            $message = $text | ConvertFrom-Json
+        }
+        catch {
+            continue
+        }
+        if (@('result', 'failed', 'cancelled') -contains $message.type) {
+            $terminal = $message
+        }
+    }
+    if ($exitCode -ne 0 -or $null -eq $terminal -or $terminal.type -ne 'result') {
+        $reason = 'the worker ended without a result.'
+        if ($null -ne $terminal -and $terminal.type -eq 'failed') {
+            $reason = "$($terminal.error.code): $($terminal.error.message)"
+        }
+        throw "Installing the separation model failed (exit code $exitCode): $reason Re-run scripts\bootstrap.ps1 to retry."
+    }
+    $model = $terminal.model
+    if ($model.downloaded) {
+        Write-Host "Downloaded and verified $($model.path) (SHA256 $($model.sha256))."
+    }
+    else {
+        Write-Host "Already installed; verified $($model.path) (SHA256 $($model.sha256))."
+    }
 }
 
 Invoke-SndsScript {
