@@ -4,6 +4,7 @@
 #include "app/Logging.h"
 #include "app/ReadinessProbe.h"
 #include "model/AppState.h"
+#include "ui/ImportScreen.h"
 #include "ui/PlaceholderScreen.h"
 #include "ui/ReadinessScreen.h"
 
@@ -23,6 +24,9 @@ public:
     void showScreen (model::AppScreen screen);
     model::AppScreen getScreen() const noexcept { return currentScreen; }
 
+    /** Switches to song import and starts importing the file (used by the --open flag). */
+    void openSong (const juce::File& file);
+
     void resized() override;
 
 private:
@@ -31,7 +35,7 @@ private:
 
     logging::LogService& log;
     ui::ReadinessScreen readinessScreen;
-    ui::PlaceholderScreen importScreen;
+    ui::ImportScreen importScreen;
     ui::PlaceholderScreen playerScreen;
     model::AppScreen currentScreen = model::AppScreen::readiness;
 

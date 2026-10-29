@@ -10,16 +10,14 @@ MainComponent::MainComponent (std::shared_ptr<ReadinessProbe> readinessProbe,
                               logging::LogService& logService)
     : log (logService),
       readinessScreen (std::move (readinessProbe), paths.getDirectory (AppDirectory::logs)),
-      importScreen ("Open a song",
-                    "Choose one WAV or MP3 file, confirm its artwork, and SNDS prepares four stems "
-                    "(vocals, drums, bass, other) locally.\n\nSong import is not available in this build yet."),
+      importScreen (paths, logService),
       playerScreen ("Player", "Transport, stem mixing, and reactive artwork appear here once a song has been prepared.")
 {
     readinessScreen.onContinue = [this] { showScreen (AppScreen::songImport); };
     readinessScreen.onReportReady = [this] (const ReadinessReport& report) { logReadiness (report); };
 
-    importScreen.addNavigation ("Back to readiness", [this] { showScreen (AppScreen::readiness); });
-    importScreen.addNavigation ("Preview player layout", [this] { showScreen (AppScreen::player); });
+    importScreen.onBackToReadiness = [this] { showScreen (AppScreen::readiness); };
+    importScreen.onPreviewPlayer = [this] { showScreen (AppScreen::player); };
     playerScreen.addNavigation ("Back to import", [this] { showScreen (AppScreen::songImport); });
 
     addChildComponent (readinessScreen);
@@ -41,6 +39,12 @@ void MainComponent::showScreen (AppScreen screen)
 
     for (auto candidate : { AppScreen::readiness, AppScreen::songImport, AppScreen::player })
         componentFor (candidate).setVisible (candidate == screen);
+}
+
+void MainComponent::openSong (const juce::File& file)
+{
+    showScreen (AppScreen::songImport);
+    importScreen.openSource (file);
 }
 
 void MainComponent::resized()
