@@ -21,6 +21,7 @@ enum class ImportErrorCode
     unsupportedBitDepth,
     tooManyChannels,
     sampleRateOutOfRange,
+    tooLong,
     noAudio,
     truncated,
     corrupt,
@@ -49,6 +50,7 @@ struct SourceLimits
     static constexpr int maxChannels = 2;
     static constexpr double minSampleRate = 8000.0;
     static constexpr double maxSampleRate = 192000.0;
+    static constexpr int maxSeconds = 30 * 60; ///< Matches the worker's MAX_SOURCE_SECONDS.
 };
 
 /** juce::FileChooser patterns for supported sources. */
@@ -61,7 +63,7 @@ bool hasSupportedSourceExtension (const juce::File& file);
 
     Accepted: WAV (RIFF or RF64, plain or WAVE_FORMAT_EXTENSIBLE) with 8/16/24/32-bit integer PCM or
     32/64-bit float samples, and MP3 as MPEG-1 Layer III (32, 44.1, or 48 kHz); mono or stereo;
-    8 kHz to 192 kHz. Everything else is rejected with an actionable ImportError.
+    8 kHz to 192 kHz; at most 30 minutes long. Everything else is rejected with an actionable ImportError.
 
     MPEG-2/2.5 MP3s (24 kHz and below) and MPEG Layer I/II are rejected: JUCE's decoder assumes 1152
     samples per frame, so their length and seek positions would be wrong.

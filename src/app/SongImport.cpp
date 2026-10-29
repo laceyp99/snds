@@ -369,6 +369,8 @@ const char* toString (ImportErrorCode code) noexcept
             return "sample-rate-out-of-range";
         case ImportErrorCode::noAudio:
             return "no-audio";
+        case ImportErrorCode::tooLong:
+            return "too-long";
         case ImportErrorCode::truncated:
             return "truncated";
         case ImportErrorCode::corrupt:
@@ -432,10 +434,18 @@ ImportResult inspectSource (const juce::File& file)
         || (info.format == SourceFormat::wav && content == "MP3"))
         return failWrongExtension (file, content);
 
-    if (info.format == SourceFormat::mp3)
-        return inspectMp3 (file, *stream, std::move (info));
+    auto result = info.format == SourceFormat::mp3 ? inspectMp3 (file, *stream, std::move (info))
+                                                   : inspectWav (file, *stream, std::move (info));
 
-    return inspectWav (file, *stream, std::move (info));
+    // Checked here, before artwork and hashing, so the worker never sees a source it would reject.
+    if (result.wasOk()
+        && static_cast<double> (result.source->lengthInFrames) > SourceLimits::maxSeconds * result.source->sampleRate)
+        return fail (ImportErrorCode::tooLong,
+                     quoted (file) + " is longer than " + juce::String (SourceLimits::maxSeconds / 60)
+                         + " minutes. SNDS alpha separates songs up to that length.",
+                     "Trim it or split it into shorter parts, then open one part.");
+
+    return result;
 }
 
 std::unique_ptr<juce::AudioFormatReader> createSourceReader (const SourceInfo& source)

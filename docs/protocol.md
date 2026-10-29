@@ -343,7 +343,7 @@ This guarantees that stems are never cached under the key of different audio.
 **Input contract.** Accepted inputs:
 
 - **Containers and subtypes:**
-  - WAV / WAVEX with `PCM_U8`, `PCM_S8`, `PCM_16`, `PCM_24`, `PCM_32`, `FLOAT` or `DOUBLE`.
+  - WAV / WAVEX / RF64 with `PCM_U8`, `PCM_S8`, `PCM_16`, `PCM_24`, `PCM_32`, `FLOAT` or `DOUBLE`.
   - MP3 (MPEG layer III).
 - **Channels:** mono or stereo.
 - **Sample rate:** 8–192 kHz.

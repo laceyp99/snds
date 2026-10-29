@@ -80,6 +80,16 @@ def test_supported_wav_variants_decode(tmp_path: Path, sr: int, ch: int, subtype
     assert src.audio.dtype == np.float32 and src.audio.shape == (frames, ch)
 
 
+def test_rf64_wav_decodes(tmp_path: Path) -> None:
+    # The app accepts RF64 (large-file) WAVs, so the worker must too.
+    frames = 48000 + 7
+    x = synth_song(frames / 48000 + 0.01, sr=48000)[:frames]
+    path = tmp_path / "s.wav"
+    sf.write(str(path), x, 48000, format="RF64", subtype="PCM_24")
+    src = decode_source(path)
+    assert src.format == "RF64" and (src.frames, src.channels) == (frames, 2)
+
+
 def test_mp3_decoded_frames_and_gapless_info(tmp_path: Path) -> None:
     frames = 44100 * 3 + 345
     x = synth_song(frames / 44100 + 0.01, seed=5)[:frames]

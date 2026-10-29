@@ -143,6 +143,22 @@ public:
             expect (result.error.action.contains ("192 kHz"), result.error.action);
         }
 
+        beginTest ("Sources longer than 30 minutes are rejected");
+        {
+            // 8 kHz mono 8-bit keeps a 30-minute file near 14 MB.
+            WavSpec spec;
+            spec.sampleRate = 8000;
+            spec.numChannels = 1;
+            spec.bitsPerSample = 8;
+            spec.numFrames = static_cast<juce::int64> (SourceLimits::maxSeconds) * spec.sampleRate;
+            expect (inspectSource (writeFile (temp, "30min.wav", makeWav (spec))).wasOk());
+
+            spec.numFrames += 1;
+            const auto result = inspectSource (writeFile (temp, "30min_plus.wav", makeWav (spec)));
+            expectRejected (result, ImportErrorCode::tooLong);
+            expect (result.error.message.contains ("30 minutes"), result.error.message);
+        }
+
         beginTest ("Compressed and unusual WAV encodings are rejected");
         {
             WavSpec adpcm;

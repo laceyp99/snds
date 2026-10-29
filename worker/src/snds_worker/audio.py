@@ -27,6 +27,7 @@ PCM_WAV_SUBTYPES = frozenset({"PCM_U8", "PCM_S8", "PCM_16", "PCM_24", "PCM_32", 
 SUPPORTED_FORMATS: dict[str, frozenset[str]] = {
     "WAV": PCM_WAV_SUBTYPES,
     "WAVEX": PCM_WAV_SUBTYPES,
+    "RF64": PCM_WAV_SUBTYPES,  # large-file WAV; the app accepts it too
     "MP3": frozenset({"MPEG_LAYER_III"}),
 }
 RESAMPLER = {"name": "scipy.signal.resample_poly", "window": ["kaiser", 5.0], "zero_phase": True}
