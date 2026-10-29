@@ -10,6 +10,28 @@
 namespace snds
 {
 
+namespace
+{
+/**
+    The file after "--open" on the command line, or an empty File. Opens a song straight into the
+    import flow; used for integration testing and screenshots. Relative paths use the working directory.
+*/
+juce::File findOpenArgument (const juce::StringArray& arguments)
+{
+    const auto index = arguments.indexOf ("--open");
+
+    if (index < 0 || index + 1 >= arguments.size())
+        return {};
+
+    const auto path = arguments[index + 1].trim().unquoted();
+
+    if (path.isEmpty())
+        return {};
+
+    return juce::File::getCurrentWorkingDirectory().getChildFile (path);
+}
+} // namespace
+
 class MainWindow final : public juce::DocumentWindow
 {
 public:
@@ -62,12 +84,17 @@ public:
             juce::Logger::outputDebugString ("SNDS: log directory unavailable: " + logsReady.getErrorMessage());
 
         auto probe = std::make_shared<LocalReadinessProbe> (LocalEnvironment::capture (*paths));
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(),
-                                                   std::make_unique<MainComponent> (probe, *paths, *logService));
+        auto content = std::make_unique<MainComponent> (probe, *paths, *logService);
+        mainComponent = content.get();
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), std::move (content));
+
+        if (const auto file = findOpenArgument (getCommandLineParameterArray()); file != juce::File())
+            mainComponent->openSong (file);
     }
 
     void shutdown() override
     {
+        mainComponent = nullptr;
         mainWindow = nullptr;
 
         if (logService != nullptr)
@@ -81,10 +108,14 @@ public:
 
     void systemRequestedQuit() override { quit(); }
 
-    void anotherInstanceStarted (const juce::String&) override
+    void anotherInstanceStarted (const juce::String& commandLine) override
     {
         if (mainWindow != nullptr)
             mainWindow->toFront (true);
+
+        if (const auto file = findOpenArgument (juce::StringArray::fromTokens (commandLine, true));
+            mainComponent != nullptr && file != juce::File())
+            mainComponent->openSong (file);
     }
 
     void unhandledException (const std::exception* e, const juce::String& sourceFilename, int lineNumber) override
@@ -100,6 +131,7 @@ private:
     std::unique_ptr<logging::LogService> logService;
     std::unique_ptr<logging::JuceLoggerBridge> loggerBridge;
     std::unique_ptr<MainWindow> mainWindow;
+    MainComponent* mainComponent = nullptr; // owned by mainWindow
 };
 
 } // namespace snds

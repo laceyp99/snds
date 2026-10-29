@@ -1,7 +1,8 @@
 // Console runner for SNDS JUCE unit tests.
 //
-// Usage: snds_tests [--list] [name-filter]
+// Usage: snds_tests [--list | --benchmark] [name-filter]
 //   --list        print the registered test names and exit
+//   --benchmark   run the opt-in benchmarks (e.g. fingerprint throughput) instead of the unit tests
 //   name-filter   run only tests whose name contains the filter (case-insensitive)
 //
 // Exit codes: 0 all passed, 1 failures, 2 no tests matched.
@@ -25,8 +26,14 @@ int main (int argc, char* argv[])
 {
     const juce::ScopedJuceInitialiser_GUI juceInitialiser;
 
-    const auto argument = argc > 1 ? juce::String::fromUTF8 (argv[1]) : juce::String();
-    const auto registered = juce::UnitTest::getTestsInCategory (snds::test::testCategory);
+    auto argument = argc > 1 ? juce::String::fromUTF8 (argv[1]) : juce::String();
+    const auto benchmarks = argument == "--benchmark";
+
+    if (benchmarks)
+        argument = argc > 2 ? juce::String::fromUTF8 (argv[2]) : juce::String();
+
+    const auto registered =
+        juce::UnitTest::getTestsInCategory (benchmarks ? snds::test::benchmarkCategory : snds::test::testCategory);
 
     if (argument == "--list")
     {

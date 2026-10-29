@@ -1,6 +1,5 @@
-"""SNDS preparation worker (separation, BPM analysis, stem normalization).
-
-Phase 1 skeleton only: the versioned JSON job protocol is defined in Phase 2.
-"""
+"""SNDS preparation worker: pinned htdemucs separation, stem normalization, BPM analysis,
+output validation and atomic cache publication behind a versioned NDJSON protocol
+(docs/protocol.md)."""
 
 __version__ = "0.1.0"

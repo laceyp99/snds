@@ -2,15 +2,29 @@
 add_library(snds_core STATIC
     app/AppPaths.cpp
     app/AppPaths.h
+    app/EmbeddedArtwork.cpp
+    app/EmbeddedArtwork.h
     app/Logging.cpp
     app/Logging.h
     app/MainComponent.cpp
     app/MainComponent.h
     app/ReadinessProbe.cpp
     app/ReadinessProbe.h
+    app/SongImport.cpp
+    app/SongImport.h
+    app/SourceFingerprint.cpp
+    app/SourceFingerprint.h
+    audio/SourceFormats.cpp
+    audio/SourceFormats.h
     model/AppState.h
+    model/SongSource.cpp
+    model/SongSource.h
+    rendering/FallbackArtwork.cpp
+    rendering/FallbackArtwork.h
     rendering/OpenGLCapability.cpp
     rendering/OpenGLCapability.h
+    ui/ImportScreen.cpp
+    ui/ImportScreen.h
     ui/PlaceholderScreen.cpp
     ui/PlaceholderScreen.h
     ui/ReadinessScreen.cpp
@@ -23,6 +37,11 @@ target_compile_definitions(snds_core PUBLIC SNDS_VERSION_STRING="${PROJECT_VERSI
 target_link_libraries(snds_core
     PUBLIC snds::juce
     PRIVATE snds::compiler_options)
+
+# Source fingerprinting hashes with Windows CNG (see app/SourceFingerprint.h).
+if(WIN32)
+    target_link_libraries(snds_core PRIVATE bcrypt)
+endif()
 set_target_properties(snds_core PROPERTIES FOLDER "SNDS")
 
 # The desktop application (product name "SNDS" -> SNDS.exe).

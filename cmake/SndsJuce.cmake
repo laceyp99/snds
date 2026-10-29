@@ -41,6 +41,7 @@ add_library(snds::juce ALIAS snds_juce)
 target_link_libraries(snds_juce
     PRIVATE
         juce::juce_core
+        juce::juce_cryptography
         juce::juce_events
         juce::juce_data_structures
         juce::juce_graphics

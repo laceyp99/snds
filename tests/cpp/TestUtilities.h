@@ -5,8 +5,11 @@
 namespace snds::test
 {
 
-/** Category shared by every SNDS unit test; the runner only runs this category. */
+/** Category shared by every SNDS unit test; the runner only runs this category by default. */
 inline constexpr const char* testCategory = "SNDS";
+
+/** Slow measurements that only run with "snds_tests --benchmark". */
+inline constexpr const char* benchmarkCategory = "SNDS benchmark";
 
 /** A unique directory below the system temp folder, deleted recursively on destruction. */
 class ScopedTempDirectory
