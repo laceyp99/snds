@@ -1,60 +1,66 @@
-﻿<#
+<#
 .SYNOPSIS
-    Runs the SNDS C++ tests (ctest) and the worker Python tests (pytest).
-
+    Builds and runs the C++ tests (CTest) and runs the Python worker tests (pytest).
 .DESCRIPTION
-    Python tests run with worker\.venv\Scripts\python.exe directly (no activation). They are skipped with
-    a message when the worker environment has not been bootstrapped yet.
-
+    Both suites run with SNDS_HOME pointing at build\test-home, so tests never touch the real
+    SNDS data directory. Both suites always run; the script fails if either fails.
 .PARAMETER Config
-    Build configuration whose C++ tests to run: Debug (default) or Release.
+    Debug (default) or Release, for the C++ tests.
 #>
-[CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
-    [string]$Config = 'Debug',
-    [switch]$SkipCpp,
-    [switch]$SkipPython
+    [string] $Config = 'Debug',
+    [switch] $SkipCpp,
+    [switch] $SkipPython
 )
 
-. (Join-Path $PSScriptRoot '_common.ps1')
+. "$PSScriptRoot\common.ps1"
+trap { Write-Host "test failed: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 
-Invoke-SndsScript {
-    $failed = @()
+$testHome = Join-Path $SndsBuildDir 'test-home'
+if (Test-Path -LiteralPath $testHome) {
+    Remove-Item -LiteralPath $testHome -Recurse -Force
+}
+$null = New-Item -ItemType Directory -Path $testHome -Force
 
+$previousHome = $env:SNDS_HOME
+$env:SNDS_HOME = $testHome
+$failures = @()
+
+try {
     if (-not $SkipCpp) {
-        $ctest = Assert-SndsCommand -Name 'ctest' -Hint 'ctest ships with CMake; install CMake 3.25 or newer.'
-        if (-not (Test-Path -LiteralPath (Get-SndsExecutable -Name 'snds_tests' -Config $Config))) {
-            throw "The C++ tests ($Config) are not built. Run: scripts\build.ps1 -Config $Config"
-        }
-        Write-SndsStep "C++ tests ($Config)"
-        $exitCode = Invoke-SndsNative -FilePath $ctest -ArgumentList @('--test-dir', $SndsBuildDir, '-C', $Config, '--output-on-failure') -AllowFailure
-        if ($exitCode -ne 0) {
-            $failed += "C++ tests ($Config)"
+        & "$PSScriptRoot\build.ps1" -Config $Config
+        if ($LASTEXITCODE -ne 0) {
+            $failures += 'C++ build'
+        } else {
+            Write-Step "Running C++ tests ($Config)"
+            try {
+                Invoke-Native (Get-CTest) @('--test-dir', $SndsBuildDir, '-C', $Config, '--output-on-failure', '--parallel', '4')
+            } catch {
+                $failures += 'C++ tests'
+            }
         }
     }
 
     if (-not $SkipPython) {
+        Write-Step 'Running Python worker tests'
         if (-not (Test-Path -LiteralPath $SndsWorkerPython)) {
-            Write-SndsWarning "Skipping Python tests: $SndsWorkerPython does not exist. Run scripts\bootstrap.ps1 first."
+            throw "The worker environment is missing ($SndsWorkerPython). Run scripts\bootstrap.ps1."
         }
-        else {
-            Write-SndsStep 'Python worker tests'
-            Push-Location -LiteralPath $SndsWorkerDir
-            try {
-                $exitCode = Invoke-SndsNative -FilePath $SndsWorkerPython -ArgumentList @('-m', 'pytest') -AllowFailure
-            }
-            finally {
-                Pop-Location
-            }
-            if ($exitCode -ne 0) {
-                $failed += 'Python worker tests'
-            }
+        try {
+            # The folder argument makes pytest use worker\pyproject.toml as its configuration.
+            Invoke-Native $SndsWorkerPython @('-m', 'pytest', $SndsWorkerRoot)
+        } catch {
+            $failures += 'Python tests'
         }
     }
-
-    if ($failed.Count -gt 0) {
-        throw "Failed: $($failed -join ', ')"
-    }
-    Write-SndsStep 'All requested tests passed'
+} finally {
+    $env:SNDS_HOME = $previousHome
 }
+
+if ($failures.Count -gt 0) {
+    Write-Host "Failed: $($failures -join ', ')" -ForegroundColor Red
+    exit 1
+}
+Write-Host 'All tests passed.' -ForegroundColor Green
+exit 0

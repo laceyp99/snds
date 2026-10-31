@@ -1,5 +1,8 @@
-"""SNDS preparation worker: pinned htdemucs separation, stem normalization, BPM analysis,
-output validation and atomic cache publication behind a versioned NDJSON protocol
-(docs/protocol.md)."""
+"""SNDS worker: a short-lived helper process launched by the SNDS app."""
 
-__version__ = "0.1.0"
+from importlib import metadata
+
+try:
+    __version__ = metadata.version("snds-worker")
+except metadata.PackageNotFoundError:  # imported from a source tree without installation
+    __version__ = "0+unknown"

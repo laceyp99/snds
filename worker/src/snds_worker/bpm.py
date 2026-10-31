@@ -1,173 +1,192 @@
-"""Global BPM estimation (in-house numpy/scipy estimator from spikes/python/bpm_compare.py).
+"""BPM analysis outcome for `song.json`.
 
-Spectral-flux onset envelope -> global autocorrelation -> comb salience x log-normal prior at
-120 BPM -> long-lag refinement. Returns BPM, a 0..1 confidence and the relative salience of the
-half/double tempo so the app can offer half/double correction.
-
-Signal choice: the separated ``drums`` stem is analysed first (the pulse without vocal/bass/pad
-note changes that produce spurious onsets); the full mix is always analysed too and used when
-the drums stem is near-silent or clearly less confident. Both candidates go into the manifest.
+A failed analysis never fails the job: it yields `value=None`, `confidence=0`, an empty
+alternatives list, and a short `error`. The analyzer identity is always recorded.
 """
 
 from __future__ import annotations
 
-import math
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from importlib import metadata
+from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.signal import resample_poly
 
-BPM_MIN = 40.0
-BPM_MAX = 240.0
-MIN_SECONDS = 5.0
-ANALYSIS_SR = 22050
-N_FFT = 2048
-HOP = 256
-FRAME_BATCH = 2048
-DRUMS_MIN_RELATIVE_DB = -30.0  # drums stem quieter than this vs the mix -> use the mix
-DRUMS_CONFIDENCE_MARGIN = 0.1
-LOW_CONFIDENCE = 0.3
-ESTIMATOR = {"name": "snds-acf-tempo", "version": 1}
+from snds_worker import model
+from snds_worker.cancel import CancelToken
+from snds_worker.decode import DecodedSource
+from snds_worker.errors import JobCancelled
+
+log = logging.getLogger(__name__)
+
+ANALYZER_NAME = "beat_this"
 
 
-def _band_matrix(n_fft: int, sr: int) -> np.ndarray:
-    freqs = np.fft.rfftfreq(n_fft, 1 / sr)
-    edges = np.geomspace(30, 11000, 25)
-    m = np.zeros((freqs.size, 24), dtype=np.float32)
-    for j, (lo, hi) in enumerate(zip(edges[:-1], edges[1:], strict=True)):
-        m[(freqs >= lo) & (freqs < hi), j] = 1.0
-    return m
+@dataclass
+class BpmOutcome:
+    value: float | None
+    confidence: float
+    beats: int
+    alternatives: list[float] = field(default_factory=list)
+    error: str | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        """The `bpm` object of song.json (the user override is added by the app, never here)."""
+        try:
+            version = metadata.version("beat-this")
+        except metadata.PackageNotFoundError:
+            version = "unknown"
+        return {
+            "value": self.value,
+            "confidence": self.confidence,
+            "beats": self.beats,
+            "alternatives": list(self.alternatives),
+            "error": self.error,
+            "analyzer": {
+                "name": ANALYZER_NAME,
+                "version": version,
+                "checkpointSha256": model.BEAT_MODEL_SHA256,
+            },
+            "userOverride": None,
+        }
 
 
-def onset_envelope(x: np.ndarray, sr: int = ANALYSIS_SR) -> np.ndarray:
-    """Band-wise log spectral flux. Frames are processed in batches to bound memory."""
-    frames = 1 + (len(x) - N_FFT) // HOP
-    window = np.hanning(N_FFT).astype(np.float32)
-    bands_m = _band_matrix(N_FFT, sr)
-    bands = np.empty((frames, bands_m.shape[1]), dtype=np.float32)
-    offsets = np.arange(N_FFT)[None, :]
-    for start in range(0, frames, FRAME_BATCH):
-        stop = min(frames, start + FRAME_BATCH)
-        idx = np.arange(start, stop)[:, None] * HOP + offsets
-        spec = np.abs(np.fft.rfft(x[idx] * window, axis=1)).astype(np.float32)
-        bands[start:stop] = spec @ bands_m
-    logb = np.log1p(1000 * bands / (bands.max() + 1e-12))
-    flux = np.maximum(0, np.diff(logb, axis=0)).sum(axis=1)
-    fps = sr / HOP
-    win = int(fps * 0.5) | 1
-    flux = flux - np.convolve(flux, np.ones(win) / win, mode="same")
-    return np.maximum(flux, 0).astype(np.float64)
+def failed(reason: str, beats: int = 0) -> BpmOutcome:
+    return BpmOutcome(value=None, confidence=0.0, beats=beats, alternatives=[], error=reason)
 
 
-def estimate_tempo(x: np.ndarray, sr: int) -> dict[str, Any]:
-    """x: mono float signal. Returns {"status": "ok", "bpm", "confidence", "half", "double"} or
-    {"status": "insufficient-audio" | "no-onsets"}."""
-    x = np.asarray(x, dtype=np.float32)
-    if len(x) < MIN_SECONDS * sr:
-        return {"status": "insufficient-audio", "seconds": round(len(x) / sr, 3)}
-    if sr != ANALYSIS_SR:
-        g = math.gcd(sr, ANALYSIS_SR)
-        x = resample_poly(x, ANALYSIS_SR // g, sr // g).astype(np.float32)
-    if float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) < 1e-5:
-        return {"status": "no-onsets"}
-    onset = onset_envelope(x)
-    std = onset.std()
-    if not std > 1e-9:
-        return {"status": "no-onsets"}
-    onset /= std
-    fps = ANALYSIS_SR / HOP
+# --- Analysis ------------------------------------------------------------------------------
+#
+# beat_this 1.1.0 with the `small0` checkpoint (spikes/bpm-library): beats from the source mix,
+# tempo from the beat intervals. The model, chunking and post-processing are beat_this's own;
+# the chunk loop is spelled out here only to poll cancellation and report progress.
 
-    m = len(onset)
-    f = np.fft.rfft(onset - onset.mean(), n=2 * m)
-    acf = np.fft.irfft(np.abs(f) ** 2)[:m]
-    if not acf[0] > 0:
-        return {"status": "no-onsets"}
-    acf /= acf[0]
-
-    def acf_at(lag: np.ndarray) -> np.ndarray:
-        return np.interp(lag, np.arange(m), acf, right=0.0)
-
-    grid = np.arange(BPM_MIN, BPM_MAX, 0.1)
-    lags = 60.0 * fps / grid
-    salience = np.maximum(sum(acf_at(k * lags) / k**0.5 for k in (1, 2, 3, 4)), 0)
-    prior = np.exp(-0.5 * (np.log2(grid / 120.0) / 0.9) ** 2)
-    score = salience * prior
-    i = int(np.argmax(score))
-    if not score[i] > 0:
-        return {"status": "no-onsets"}
-    # Refine within +-2 % using many beat multiples (long lags -> finer tempo resolution).
-    fine = np.arange(grid[i] * 0.98, grid[i] * 1.02, 0.005)
-    fine_lags = 60.0 * fps / fine
-    kmax = max(1, int((m / 2) // fine_lags.max()))
-    fine_sal = sum(acf_at(k * fine_lags) for k in range(1, min(kmax, 32) + 1))
-    bpm = float(np.clip(fine[int(np.argmax(fine_sal))], BPM_MIN, BPM_MAX))
-
-    def alternative(b: float) -> dict[str, Any] | None:
-        if not BPM_MIN <= b <= BPM_MAX:
-            return None
-        j = int(np.argmin(np.abs(grid - b)))
-        lo, hi = max(0, j - 5), min(len(grid), j + 6)
-        rel = float(salience[lo:hi].max() / (salience[i] + 1e-12))
-        return {"bpm": round(b, 2), "relative_salience": round(rel, 3)}
-
-    # Confidence: how much the winner stands out from the best tempo that is neither within
-    # 4 % of it nor an octave/third relative of it.
-    related = np.zeros_like(grid, dtype=bool)
-    for r in (1, 2, 0.5, 3, 1 / 3, 1.5, 2 / 3):
-        related |= np.abs(grid / (bpm * r) - 1) < 0.04
-    rival = float(score[~related].max()) if (~related).any() else 0.0
-    confidence = float(np.clip(1 - rival / (score[i] + 1e-12), 0, 1))
-    return {
-        "status": "ok",
-        "bpm": round(bpm, 2),
-        "confidence": round(confidence, 3),
-        "half": alternative(bpm / 2),
-        "double": alternative(bpm * 2),
-    }
+CHUNK_FRAMES = 1500
+BORDER_FRAMES = 6
+MIN_BEATS = 3
+MIN_BPM, MAX_BPM = 20.0, 400.0
+_CONSISTENT = 0.10  # intervals within 10% of the median set the tempo
+_REGULAR = 0.05  # confidence: share of intervals within 5% of the median
 
 
-def _rms_db(x: np.ndarray) -> float | None:
-    ms = float(np.mean(np.square(x, dtype=np.float64))) if x.size else 0.0
-    return 10 * math.log10(ms) if ms > 0 else None
+def tempo_from_beats(beats: np.ndarray) -> tuple[float, float] | None:
+    """(BPM, confidence) from beat times in seconds, or None with fewer than three beats.
+
+    Beat trackers quantize beat times to their frame rate (20 ms for beat_this), so the median
+    interval alone is coarse. Averaging every interval within 10% of the median recovers
+    sub-frame precision; confidence is the share of intervals within 5% of the median.
+    """
+    beats = np.asarray(beats, dtype=float)
+    if len(beats) < MIN_BEATS:
+        return None
+    intervals = np.diff(beats)
+    median = float(np.median(intervals))
+    if median <= 0:
+        return None
+    consistent = intervals[np.abs(intervals - median) <= _CONSISTENT * median]
+    confidence = float(np.mean(np.abs(intervals - median) <= _REGULAR * median))
+    period = float(consistent.mean()) if len(consistent) else median
+    return 60.0 / period, confidence
 
 
-def analyze_bpm(drums: np.ndarray | None, mix: np.ndarray, sr: int) -> dict[str, Any]:
-    """Choose the global BPM from the drums stem (preferred) or the full mix (mono inputs)."""
-    candidates: dict[str, Any] = {"mix": estimate_tempo(mix, sr)}
-    drums_rel = None
-    if drums is not None:
-        d_db, m_db = _rms_db(drums), _rms_db(mix)
-        if d_db is not None and m_db is not None:
-            drums_rel = round(d_db - m_db, 2)
-        if drums_rel is not None and drums_rel > DRUMS_MIN_RELATIVE_DB:
-            candidates["drums"] = estimate_tempo(drums, sr)
-        else:
-            candidates["drums"] = {"status": "skipped-quiet"}
-    drums_c = candidates.get("drums", {})
-    mix_c = candidates["mix"]
-    chosen_signal = None
-    if drums_c.get("status") == "ok" and (
-        mix_c.get("status") != "ok"
-        or drums_c["confidence"] >= mix_c["confidence"] - DRUMS_CONFIDENCE_MARGIN
-    ):
-        chosen_signal = "drums"
-    elif mix_c.get("status") == "ok":
-        chosen_signal = "mix"
-    result: dict[str, Any] = {
-        "status": "ok" if chosen_signal else mix_c.get("status", "no-onsets"),
-        "value": None,
-        "confidence": None,
-        "half": None,
-        "double": None,
-        "signal": chosen_signal,
-        "range": [BPM_MIN, BPM_MAX],
-        "estimator": dict(ESTIMATOR),
-        "drums_relative_level_db": drums_rel,
-        "candidates": candidates,
-    }
-    if chosen_signal:
-        c = candidates[chosen_signal]
-        result.update(
-            value=c["bpm"], confidence=c["confidence"], half=c["half"], double=c["double"]
+def outcome_from_beats(beats: np.ndarray) -> BpmOutcome:
+    count = len(beats)
+    result = tempo_from_beats(beats)
+    if result is None:
+        return failed(f"too few beats detected ({count})", count)
+    bpm, confidence = result
+    if not MIN_BPM <= bpm <= MAX_BPM:
+        return failed(f"implausible tempo detected ({bpm:.1f} BPM)", count)
+    return BpmOutcome(
+        value=round(bpm, 3),
+        confidence=round(confidence, 4),
+        beats=count,
+        alternatives=[round(bpm * 0.5, 3), round(bpm * 2.0, 3)],
+    )
+
+
+def detect_beats(
+    audio: np.ndarray,
+    sample_rate: int,
+    checkpoint: Path,
+    device: str,
+    token: CancelToken,
+    progress: Callable[[float], None],
+) -> np.ndarray:
+    """Beat times in seconds for a (frames, channels) float32 mix."""
+    import torch
+    from beat_this.inference import Audio2Beats, aggregate_prediction, split_piece
+
+    tracker = Audio2Beats(checkpoint_path=str(checkpoint), device=device, dbn=False)
+    token.raise_if_cancelled()
+    with torch.inference_mode():
+        spect = tracker.signal2spect(audio, sample_rate)
+        chunks, starts = split_piece(spect, CHUNK_FRAMES, BORDER_FRAMES, avoid_short_end=True)
+        predictions = []
+        for index, chunk in enumerate(chunks):
+            token.raise_if_cancelled()
+            out = tracker.model(chunk.unsqueeze(0))
+            predictions.append({"beat": out["beat"][0], "downbeat": out["downbeat"][0]})
+            progress((index + 1) / len(chunks))
+        beat, downbeat = aggregate_prediction(
+            predictions,
+            starts,
+            spect.shape[0],
+            CHUNK_FRAMES,
+            BORDER_FRAMES,
+            "keep_first",
+            spect.device,
         )
-    return result
+        beats, _downbeats = tracker.frames2beats(beat.float(), downbeat.float())
+    return np.asarray(beats, dtype=float)
+
+
+def make_analyzer(model_dir: Path):
+    """The pipeline's `analyze_bpm` stage for the checkpoint in `model_dir`.
+
+    Never raises except for cancellation: any other problem becomes a failed outcome, because
+    a missing tempo must not cost the user their stems. A CUDA error is retried on the CPU.
+    """
+    checkpoint = model_dir / model.BEAT_MODEL_FILENAME
+
+    def analyze(
+        source: DecodedSource,
+        device: str,
+        token: CancelToken,
+        progress: Callable[[float], None],
+    ) -> BpmOutcome:
+        if not model.file_matches(checkpoint, model.BEAT_MODEL_SHA256, model.BEAT_MODEL_SIZE):
+            log.warning("BPM checkpoint missing or damaged: %s", checkpoint)
+            return failed(
+                "the BPM model is missing or damaged (run scripts\\bootstrap.ps1 to install it)"
+            )
+
+        for attempt in ["cpu"] if device == "cpu" else [device, "cpu"]:
+            try:
+                beats = detect_beats(
+                    source.audio, source.sample_rate, checkpoint, attempt, token, progress
+                )
+                outcome = outcome_from_beats(beats)
+                log.info(
+                    "BPM on %s: %s (confidence %s, %d beats)%s",
+                    attempt,
+                    outcome.value,
+                    outcome.confidence,
+                    outcome.beats,
+                    f" - {outcome.error}" if outcome.error else "",
+                )
+                return outcome
+            except JobCancelled:
+                raise
+            except Exception as error:
+                log.exception("BPM analysis failed on %s", attempt)
+                if attempt != "cpu":
+                    log.warning("Retrying the BPM analysis on the CPU")
+                    continue
+                return failed(f"analysis failed ({type(error).__name__}: {error})")
+        raise AssertionError("unreachable")
+
+    return analyze

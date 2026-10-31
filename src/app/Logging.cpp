@@ -1,305 +1,301 @@
 #include "app/Logging.h"
 
-namespace snds::logging
-{
+#include <juce_events/juce_events.h>
 
+#include <algorithm>
+
+namespace snds
+{
 namespace
 {
-thread_local bool currentThreadIsRealtime = false;
+static_assert (sizeof (char32_t) == sizeof (juce::juce_wchar));
 
-bool isWordCharacter (juce::juce_wchar c) noexcept
+std::u32string toUtf32 (const juce::String& text)
 {
-    return juce::CharacterFunctions::isLetterOrDigit (c);
-}
+    std::u32string result;
+    result.reserve (static_cast<size_t> (text.length()));
 
-bool isPathSeparator (juce::juce_wchar c) noexcept
-{
-    return c == '\\' || c == '/';
-}
+    for (auto p = text.getCharPointer(); ! p.isEmpty();)
+        result.push_back (static_cast<char32_t> (p.getAndAdvance()));
 
-/** Case-insensitive replacement of whole-token occurrences of needle. */
-juce::String replaceBounded (const juce::String& text,
-                             const juce::String& needle,
-                             const juce::String& replacement,
-                             bool requireSeparatorBefore)
-{
-    if (needle.isEmpty() || text.isEmpty())
-        return text;
-
-    juce::String result;
-    auto start = 0;
-
-    for (;;)
-    {
-        const auto index = text.indexOfIgnoreCase (start, needle);
-
-        if (index < 0)
-            break;
-
-        const auto end = index + needle.length();
-        const auto before = index > 0 ? text[index - 1] : juce::juce_wchar (0);
-        const auto after = end < text.length() ? text[end] : juce::juce_wchar (0);
-
-        auto bounded = ! isWordCharacter (before) && ! isWordCharacter (after);
-
-        if (requireSeparatorBefore)
-            bounded = bounded && isPathSeparator (before);
-
-        if (bounded)
-        {
-            result << text.substring (start, index) << replacement;
-            start = end;
-        }
-        else
-        {
-            result << text.substring (start, index + 1);
-            start = index + 1;
-        }
-    }
-
-    result << text.substring (start);
     return result;
 }
-} // namespace
 
-const char* toString (LogCategory category) noexcept
+juce::String fromUtf32 (const std::u32string& text)
 {
-    switch (category)
-    {
-        case LogCategory::app:
-            return "app";
-        case LogCategory::worker:
-            return "worker";
-    }
-
-    return "unknown";
+    return juce::String (
+        juce::CharPointer_UTF32 (reinterpret_cast<const juce::CharPointer_UTF32::CharType*> (text.c_str())));
 }
 
-const char* toString (LogLevel level) noexcept
+bool isSeparator (char32_t c)
+{
+    return c == U'\\' || c == U'/';
+}
+
+char32_t toLower (char32_t c)
+{
+    return static_cast<char32_t> (juce::CharacterFunctions::toLowerCase (static_cast<juce::juce_wchar> (c)));
+}
+
+bool continuesPathComponent (char32_t c)
+{
+    return c == U'_' || c == U'-' || juce::CharacterFunctions::isLetterOrDigit (static_cast<juce::juce_wchar> (c));
+}
+
+std::vector<std::u32string> splitPath (const std::u32string& path)
+{
+    std::vector<std::u32string> components;
+    std::u32string current;
+
+    for (auto c : path)
+    {
+        if (! isSeparator (c))
+        {
+            current.push_back (c);
+        }
+        else if (! current.empty())
+        {
+            components.push_back (current);
+            current.clear();
+        }
+    }
+
+    if (! current.empty())
+        components.push_back (current);
+
+    return components;
+}
+
+// Length of the path made of `components` starting at text[start], or 0 if there is none.
+size_t matchPath (const std::u32string& text, size_t start, const std::vector<std::u32string>& components)
+{
+    auto position = start;
+
+    for (size_t index = 0; index < components.size(); ++index)
+    {
+        if (index > 0)
+        {
+            if (position >= text.size() || ! isSeparator (text[position]))
+                return 0;
+
+            while (position < text.size() && isSeparator (text[position]))
+                ++position;
+        }
+
+        const auto& component = components[index];
+
+        if (text.size() - position < component.size())
+            return 0;
+
+        for (size_t offset = 0; offset < component.size(); ++offset)
+            if (toLower (text[position + offset]) != toLower (component[offset]))
+                return 0;
+
+        position += component.size();
+    }
+
+    if (position < text.size() && continuesPathComponent (text[position]))
+        return 0;
+
+    return position - start;
+}
+
+const char* levelName (RotatingFileLogger::Level level)
 {
     switch (level)
     {
-        case LogLevel::debug:
-            return "DEBUG";
-        case LogLevel::info:
+        case RotatingFileLogger::Level::info:
             return "INFO";
-        case LogLevel::warning:
+        case RotatingFileLogger::Level::warning:
             return "WARNING";
-        case LogLevel::error:
+        case RotatingFileLogger::Level::error:
             return "ERROR";
     }
 
-    return "UNKNOWN";
+    return "INFO";
 }
+
+juce::String currentThreadLabel()
+{
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        return "message";
+
+    if (auto* thread = juce::Thread::getCurrentThread())
+        return thread->getThreadName();
+
+    return "thread "
+         + juce::String::toHexString (reinterpret_cast<juce::pointer_sized_int> (juce::Thread::getCurrentThreadId()));
+}
+
+juce::String timestamp()
+{
+    const auto now = juce::Time::getCurrentTime();
+    return now.formatted ("%Y-%m-%d %H:%M:%S.") + juce::String (now.getMilliseconds()).paddedLeft ('0', 3);
+}
+
+void logAt (RotatingFileLogger::Level level, const juce::String& message)
+{
+    if (auto* logger = dynamic_cast<RotatingFileLogger*> (juce::Logger::getCurrentLogger()))
+        logger->write (level, message);
+    else
+        juce::Logger::writeToLog (juce::String (levelName (level)) + " " + message);
+}
+} // namespace
 
 //==============================================================================
-ScopedRealtimeThread::ScopedRealtimeThread() noexcept
-    : previous (currentThreadIsRealtime)
+PathRedactor::PathRedactor (const std::vector<std::pair<juce::String, juce::String>>& variables)
 {
-    currentThreadIsRealtime = true;
-}
-
-ScopedRealtimeThread::~ScopedRealtimeThread() noexcept
-{
-    currentThreadIsRealtime = previous;
-}
-
-bool ScopedRealtimeThread::isCurrentThreadRealtime() noexcept
-{
-    return currentThreadIsRealtime;
-}
-
-//==============================================================================
-PathRedactor::PathRedactor (const juce::String& userProfilePath, const juce::String& userNameIn)
-{
-    auto profile = userProfilePath.trim().unquoted().replaceCharacter ('/', '\\');
-
-    while (profile.endsWithChar ('\\'))
-        profile = profile.dropLastCharacters (1);
-
-    // Only redact something that looks like a real directory (at least "X:\a"), never a bare drive.
-    if (profile.length() >= 4)
+    for (const auto& [name, path] : variables)
     {
-        profileSpellings.addIfNotAlreadyThere (profile.replace ("\\", "\\\\")); // JSON-escaped
-        profileSpellings.addIfNotAlreadyThere (profile);
-        profileSpellings.addIfNotAlreadyThere (profile.replaceCharacter ('\\', '/'));
+        const auto trimmed = toUtf32 (path.trim().trimCharactersAtEnd ("\\/"));
+        auto components = splitPath (trimmed);
+
+        if (! components.empty())
+            rules.push_back ({ toUtf32 ("%" + name + "%"), std::move (components), trimmed.size() });
     }
 
-    userName = userNameIn.trim();
-
-    if (userName.length() < 2 || userName.containsAnyOf ("\\/"))
-        userName.clear();
+    // Longest first, so %LOCALAPPDATA% wins over the %USERPROFILE% that usually contains it.
+    std::stable_sort (rules.begin(), rules.end(), [] (const Rule& a, const Rule& b) { return a.length > b.length; });
 }
 
-PathRedactor PathRedactor::forCurrentUser()
+PathRedactor PathRedactor::fromEnvironment()
 {
-    const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getFullPathName();
-    const auto profile = juce::SystemStats::getEnvironmentVariable ("USERPROFILE", home);
-    return PathRedactor (profile, juce::SystemStats::getLogonName());
+    return PathRedactor ({ { "LOCALAPPDATA", juce::SystemStats::getEnvironmentVariable ("LOCALAPPDATA", {}) },
+                           { "USERPROFILE", juce::SystemStats::getEnvironmentVariable ("USERPROFILE", {}) } });
 }
 
-juce::String PathRedactor::redact (const juce::String& text) const
+juce::String PathRedactor::redact (const juce::String& input) const
 {
-    auto result = text;
+    if (rules.empty() || input.isEmpty())
+        return input;
 
-    for (const auto& spelling : profileSpellings)
-        result = replaceBounded (result, spelling, profileToken, false);
+    auto text = toUtf32 (input);
 
-    if (userName.isNotEmpty())
-        result = replaceBounded (result, userName, userNameToken, true);
-
-    return result;
-}
-
-//==============================================================================
-RotatingFileLog::RotatingFileLog (juce::File activeFileIn, Options optionsIn)
-    : activeFile (std::move (activeFileIn)),
-      options (optionsIn)
-{
-    jassert (options.maxFileBytes > 0);
-    jassert (options.maxArchivedFiles >= 0);
-}
-
-RotatingFileLog::~RotatingFileLog() = default;
-
-juce::File RotatingFileLog::getArchiveFile (int index) const
-{
-    jassert (index >= 1);
-    return activeFile.getSiblingFile (activeFile.getFileNameWithoutExtension() + "." + juce::String (index)
-                                      + activeFile.getFileExtension());
-}
-
-bool RotatingFileLog::append (const juce::String& text)
-{
-    const auto numBytes = static_cast<juce::int64> (text.getNumBytesAsUTF8());
-
-    if (numBytes == 0)
-        return true;
-
-    const std::lock_guard<std::mutex> lock (mutex);
-
-    if (stream == nullptr && ! openLocked())
-        return false;
-
-    if (currentBytes > 0 && currentBytes + numBytes > options.maxFileBytes)
+    for (const auto& rule : rules)
     {
-        rotateLocked();
+        std::u32string result;
+        result.reserve (text.size());
 
-        if (! openLocked())
-            return false;
-    }
-
-    if (! stream->write (text.toRawUTF8(), static_cast<size_t> (numBytes)))
-    {
-        stream.reset();
-        return false;
-    }
-
-    // Flush every entry so the log is useful after a crash; log volume is low by design.
-    stream->flush();
-    currentBytes += numBytes;
-    return true;
-}
-
-bool RotatingFileLog::openLocked()
-{
-    stream.reset();
-
-    const auto parent = activeFile.getParentDirectory();
-
-    if (! parent.isDirectory() && parent.createDirectory().failed())
-        return false;
-
-    auto newStream = std::make_unique<juce::FileOutputStream> (activeFile);
-
-    if (newStream->failedToOpen())
-        return false;
-
-    currentBytes = newStream->getPosition(); // FileOutputStream appends at the end of existing files.
-    stream = std::move (newStream);
-    return true;
-}
-
-void RotatingFileLog::rotateLocked()
-{
-    stream.reset();
-
-    if (options.maxArchivedFiles > 0)
-    {
-        getArchiveFile (options.maxArchivedFiles).deleteFile();
-
-        for (auto index = options.maxArchivedFiles - 1; index >= 1; --index)
+        for (size_t position = 0; position < text.size();)
         {
-            const auto source = getArchiveFile (index);
-
-            if (source.existsAsFile())
-                source.moveFileTo (getArchiveFile (index + 1));
+            if (const auto length = matchPath (text, position, rule.components); length > 0)
+            {
+                result += rule.token;
+                position += length;
+            }
+            else
+            {
+                result.push_back (text[position++]);
+            }
         }
 
-        if (activeFile.moveFileTo (getArchiveFile (1)))
-            return;
+        text = std::move (result);
     }
 
-    // No archives are kept, or the active file could not be renamed (e.g. held open by another
-    // process): discard it so the log stays bounded.
-    activeFile.deleteFile();
+    return fromUtf32 (text);
 }
 
 //==============================================================================
-LogService::LogService (const juce::File& logsDirectory, PathRedactor redactorIn, RotatingFileLog::Options options)
-    : redactor (std::move (redactorIn)),
-      appLog (logsDirectory.getChildFile ("app.log"), options),
-      workerLog (logsDirectory.getChildFile ("worker.log"), options)
+RotatingFileLogger::RotatingFileLogger (juce::File logFile,
+                                        PathRedactor pathRedactor,
+                                        juce::int64 maximumBytes,
+                                        int backups)
+    : file (std::move (logFile)),
+      redactor (std::move (pathRedactor)),
+      maxBytes (maximumBytes),
+      backupCount (juce::jmax (0, backups))
 {
+    const std::scoped_lock lock (mutex);
+    open();
 }
 
-bool LogService::write (LogCategory category, LogLevel level, const juce::String& message)
+RotatingFileLogger::~RotatingFileLogger() = default;
+
+bool RotatingFileLogger::isOpen() const
 {
-    if (ScopedRealtimeThread::isCurrentThreadRealtime())
+    const std::scoped_lock lock (mutex);
+    return stream != nullptr;
+}
+
+void RotatingFileLogger::write (Level level, const juce::String& message)
+{
+    const auto line = timestamp() + " [" + currentThreadLabel() + "] " + levelName (level) + " "
+                    + redactor.redact (message) + juce::newLine;
+    const auto size = static_cast<juce::int64> (line.getNumBytesAsUTF8());
+
+    const std::scoped_lock lock (mutex);
+
+    if (stream == nullptr)
+        open();
+
+    if (stream != nullptr && bytesWritten > 0 && bytesWritten + size > maxBytes)
+        rotate();
+
+    if (stream != nullptr && stream->write (line.toRawUTF8(), static_cast<size_t> (size)))
+        bytesWritten += size;
+}
+
+void RotatingFileLogger::open()
+{
+    stream.reset();
+
+    if (file.getParentDirectory().createDirectory().failed())
+        return;
+
+    // No buffer: every line goes straight to the OS, so nothing logged is lost if the app
+    // crashes, without paying for a disk flush per line.
+    auto candidate = std::make_unique<juce::FileOutputStream> (file, 0);
+
+    if (candidate->openedOk())
     {
-        // Lock-free and allocation-free: never block or allocate on a real-time thread.
-        refusedRealtimeWrites.fetch_add (1, std::memory_order_relaxed);
-        return false;
+        bytesWritten = candidate->getPosition();
+        stream = std::move (candidate);
+    }
+}
+
+void RotatingFileLogger::rotate()
+{
+    stream.reset();
+
+    const auto backup = [this] (int index)
+    { return file.getSiblingFile (file.getFileName() + "." + juce::String (index)); };
+    auto rotated = false;
+
+    if (backupCount == 0)
+    {
+        rotated = file.deleteFile();
+    }
+    else
+    {
+        backup (backupCount).deleteFile();
+
+        for (auto index = backupCount - 1; index >= 1; --index)
+            if (backup (index).existsAsFile())
+                backup (index).moveFileTo (backup (index + 1));
+
+        rotated = file.moveFileTo (backup (1));
     }
 
-    const auto now = juce::Time::getCurrentTime();
-    const auto refused = refusedRealtimeWrites.load (std::memory_order_relaxed);
-    const auto alreadyReported = reportedRealtimeWrites.exchange (refused);
+    open();
 
-    if (refused != alreadyReported)
-        appLog.append (formatEntry (now,
-                                    LogLevel::warning,
-                                    juce::String (refused - alreadyReported)
-                                        + " log write(s) were refused because they came from a real-time thread."));
-
-    return logFor (category).append (formatEntry (now, level, redactor.redact (message)));
-}
-
-juce::File LogService::getLogFile (LogCategory category) const
-{
-    return category == LogCategory::worker ? workerLog.getActiveFile() : appLog.getActiveFile();
-}
-
-juce::String LogService::formatEntry (juce::Time time, LogLevel level, const juce::String& message)
-{
-    const auto body = message.replace ("\r\n", "\n").trimEnd().replace ("\n", "\n    ");
-    return time.toISO8601 (true) + " " + juce::String (toString (level)).paddedRight (' ', 7) + " " + body + "\n";
-}
-
-RotatingFileLog& LogService::logFor (LogCategory category) noexcept
-{
-    return category == LogCategory::worker ? workerLog : appLog;
+    // If another process holds the file, keep appending and retry after another maxBytes.
+    if (! rotated)
+        bytesWritten = 0;
 }
 
 //==============================================================================
-JuceLoggerBridge::JuceLoggerBridge (LogService& serviceIn)
-    : service (serviceIn)
+void logInfo (const juce::String& message)
 {
+    logAt (RotatingFileLogger::Level::info, message);
 }
 
-void JuceLoggerBridge::logMessage (const juce::String& message)
+void logWarning (const juce::String& message)
 {
-    service.info (LogCategory::app, message);
+    logAt (RotatingFileLogger::Level::warning, message);
 }
 
-} // namespace snds::logging
+void logError (const juce::String& message)
+{
+    logAt (RotatingFileLogger::Level::error, message);
+}
+} // namespace snds

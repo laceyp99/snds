@@ -1,84 +1,59 @@
-"""SNDS per-user data directories. Mirrors ``snds::AppPaths`` (src/app/AppPaths.cpp) and
-``Get-SndsDataRoot`` (scripts/_common.ps1): an absolute ``SNDS_DATA_DIR`` wins, otherwise
-``%LOCALAPPDATA%\\snds``. Empty or relative override values are ignored.
-"""
+"""SNDS data directory layout. The app resolves the same locations the same way."""
 
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from snds_worker.protocol import ErrorCode, WorkerError
-
-DATA_ROOT_ENV = "SNDS_DATA_DIR"
-ROOT_FOLDER = "snds"
+HOME_ENV_VAR = "SNDS_HOME"
 
 
-def resolve_data_root(explicit: Path | str | None = None) -> Path:
-    if explicit is not None:
-        path = Path(explicit)
-        if not path.is_absolute():
-            raise WorkerError(
-                ErrorCode.INVALID_REQUEST,
-                "The data root must be an absolute path",
-                {"value": str(explicit)},
-            )
-        return path
-    override = os.environ.get(DATA_ROOT_ENV, "").strip().strip('"').strip()
-    if override and os.path.isabs(override):
-        return Path(override)
-    base = os.environ.get("LOCALAPPDATA", "").strip()
-    if not base:
-        raise WorkerError(
-            ErrorCode.DATA_DIR_UNAVAILABLE,
-            "LOCALAPPDATA is not set and SNDS_DATA_DIR is not an absolute path",
-        )
-    return Path(base) / ROOT_FOLDER
+class HomeUnavailableError(RuntimeError):
+    """Neither SNDS_HOME nor LOCALAPPDATA gives a usable data directory."""
 
 
 @dataclass(frozen=True)
-class DataDirs:
-    root: Path
-
-    @classmethod
-    def resolve(cls, explicit: Path | str | None = None) -> DataDirs:
-        return cls(resolve_data_root(explicit))
+class DataPaths:
+    home: Path
 
     @property
-    def settings(self) -> Path:
-        return self.root / "settings"
+    def settings_file(self) -> Path:
+        return self.home / "settings.json"
 
     @property
     def cache(self) -> Path:
-        return self.root / "cache"
+        return self.home / "cache"
 
     @property
     def jobs(self) -> Path:
-        return self.root / "jobs"
+        return self.home / "jobs"
 
     @property
     def logs(self) -> Path:
-        return self.root / "logs"
+        return self.home / "logs"
 
     @property
     def models(self) -> Path:
-        return self.root / "models"
+        return self.home / "models"
 
-    def ensure(self, *dirs: Path) -> None:
-        for d in dirs:
-            try:
-                d.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                raise WorkerError(
-                    ErrorCode.DATA_DIR_UNAVAILABLE,
-                    f"Cannot create {d}: {exc.strerror or exc}",
-                    {"path": str(d)},
-                ) from exc
-            if not d.is_dir():
-                raise WorkerError(
-                    ErrorCode.DATA_DIR_UNAVAILABLE, f"{d} is not a directory", {"path": str(d)}
-                )
 
-    def same_volume(self, a: Path, b: Path) -> bool:
-        return os.stat(a).st_dev == os.stat(b).st_dev
+def resolve_home(environ: Mapping[str, str] | None = None) -> Path:
+    """Returns SNDS_HOME if set (relative paths resolve against the working directory),
+    otherwise %LOCALAPPDATA%\\snds. Nothing is created on disk."""
+    env = os.environ if environ is None else environ
+
+    override = env.get(HOME_ENV_VAR, "").strip().strip('"').strip()
+    if override:
+        return Path(os.path.abspath(override))
+
+    local_app_data = env.get("LOCALAPPDATA", "").strip()
+    if not local_app_data:
+        raise HomeUnavailableError(f"Neither {HOME_ENV_VAR} nor LOCALAPPDATA is set.")
+
+    return Path(local_app_data) / "snds"
+
+
+def data_paths(environ: Mapping[str, str] | None = None) -> DataPaths:
+    return DataPaths(resolve_home(environ))

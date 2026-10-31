@@ -1,21 +1,17 @@
-﻿<#
+<#
 .SYNOPSIS
-    Configures the SNDS CMake build tree (build\vs2022) with the vs2022 preset.
-
+    Configures the SNDS CMake build tree in build\ (Visual Studio 2022, x64).
 .DESCRIPTION
-    JUCE is fetched at the pinned commit and verified by SHA256 during the first configure.
-
-.PARAMETER Clean
-    Delete build\vs2022 first for a from-scratch configure.
+    The first configure downloads the pinned JUCE archive and builds JUCE's juceaide helper,
+    which takes about a minute. Later runs reuse the build tree.
 #>
-[CmdletBinding()]
-param(
-    [switch]$Clean
-)
+param()
 
-. (Join-Path $PSScriptRoot '_common.ps1')
+. "$PSScriptRoot\common.ps1"
+trap { Write-Host "configure failed: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 
-Invoke-SndsScript {
-    Invoke-SndsConfigure -Clean:$Clean
-    Write-SndsStep "Configured $SndsBuildDir. Next: scripts\build.ps1"
-}
+$cmake = Get-CMake
+
+Write-Step 'Configuring build\ (Visual Studio 17 2022, x64)'
+Invoke-Native $cmake @('-S', $SndsRepoRoot, '-B', $SndsBuildDir, '-G', 'Visual Studio 17 2022', '-A', 'x64')
+exit 0

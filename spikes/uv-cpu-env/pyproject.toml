@@ -1,0 +1,22 @@
+[project]
+name = "snds-uv-cpu-spike"
+version = "0.0.0"
+description = "Disposable dependency-resolution spike for the SNDS CPU worker environment."
+requires-python = "==3.11.*"
+dependencies = [
+    "demucs==4.0.1",
+    "numpy==1.26.4",
+    "packaging==25.0",
+    "soundfile==0.12.1",
+    "torch==2.1.2",
+    "torchaudio==2.1.2",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }

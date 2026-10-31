@@ -1,47 +1,42 @@
-﻿<#
+<#
 .SYNOPSIS
-    Launches the built SNDS app.
-
-.DESCRIPTION
-    The app finds the worker project by walking up from build\vs2022\bin\<Config>\SNDS.exe to this
-    checkout, and keeps its data under %LOCALAPPDATA%\snds (or an absolute SNDS_DATA_DIR).
-
+    Launches the built SNDS app, waits for it to close, and returns its exit code.
 .PARAMETER Config
     Debug (default) or Release.
-
-.PARAMETER Wait
-    Wait for the app to exit and return its exit code.
+.PARAMETER AppArguments
+    Passed to the app unchanged, for example: scripts\run.ps1 -Config Release --smoke-exit
 #>
-[CmdletBinding()]
 param(
     [ValidateSet('Debug', 'Release')]
-    [string]$Config = 'Debug',
-    [switch]$Wait,
+    [string] $Config = 'Debug',
     [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$AppArguments = @()
+    [string[]] $AppArguments = @()
 )
 
-. (Join-Path $PSScriptRoot '_common.ps1')
+. "$PSScriptRoot\common.ps1"
+trap { Write-Host "run failed: $($_.Exception.Message)" -ForegroundColor Red; exit 1 }
 
-Invoke-SndsScript {
-    $app = Get-SndsExecutable -Name 'SNDS' -Config $Config
-    if (-not (Test-Path -LiteralPath $app)) {
-        throw "SNDS ($Config) is not built. Run: scripts\build.ps1 -Config $Config"
-    }
+$exe = Get-AppExecutable $Config
+if (-not (Test-Path -LiteralPath $exe)) {
+    throw "$(Protect-Path $exe) does not exist. Run scripts\build.ps1 -Config $Config first."
+}
 
-    $startArguments = @{ FilePath = $app; PassThru = $true; WorkingDirectory = $SndsRepoRoot }
-    if ($AppArguments.Count -gt 0) {
-        $startArguments['ArgumentList'] = $AppArguments
-    }
-
-    Write-SndsStep "Starting $app"
-    $process = Start-Process @startArguments
-    Write-Host "SNDS is running (process $($process.Id)). Logs: $(Join-Path (Get-SndsDataRoot) 'logs')"
-
-    if ($Wait) {
-        $process.WaitForExit()
-        if ($process.ExitCode -ne 0) {
-            throw "SNDS exited with code $($process.ExitCode)."
-        }
+# Quote each argument by the rules CommandLineToArgvW uses to split it again.
+$quoted = foreach ($argument in $AppArguments) {
+    if ($argument -and $argument -notmatch '[\s"]') {
+        $argument
+    } else {
+        '"' + (($argument -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"'
     }
 }
+
+Write-Step "Running build\SNDS_artefacts\$Config\SNDS.exe $($quoted -join ' ')"
+$startArguments = @{ FilePath = $exe; PassThru = $true }
+if ($quoted) {
+    $startArguments.ArgumentList = ($quoted -join ' ')
+}
+$process = Start-Process @startArguments
+$null = $process.Handle  # keeps the handle so ExitCode is available after exit
+$process.WaitForExit()
+Write-Host "SNDS exited with code $($process.ExitCode)."
+exit $process.ExitCode

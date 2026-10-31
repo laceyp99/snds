@@ -1,0 +1,6 @@
+build/
+build-*/
+out/
+reports/
+*.png
+opengl-tier-report*.json

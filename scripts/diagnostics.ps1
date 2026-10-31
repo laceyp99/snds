@@ -1,205 +1,256 @@
-﻿<#
+<#
 .SYNOPSIS
-    Prints an SNDS environment report for troubleshooting (safe to paste into an issue).
-
+    Prints a diagnostics report for bug reports: system, toolchain, worker, model, settings, cache, logs, and build.
 .DESCRIPTION
-    Reports OS, toolchain, uv, worker environment, NVIDIA GPU, disk space, SNDS data folders and build
-    outputs. The user profile path is shown as %USERPROFILE%; no environment variables or secrets are
-    dumped. Missing items are reported, not treated as errors.
-
-.PARAMETER Deep
-    Also import torch in the worker environment to report CUDA availability (takes a few seconds).
-
-.PARAMETER GlProbe
-    Also run the OpenGL capability probe (briefly opens a small window).
+    Read-only. User paths are redacted to %USERPROFILE% and %LOCALAPPDATA%. Each section reports
+    its own failures, so the script always finishes. The sections System, Data directories, Model,
+    Worker environment, Settings, Cache, and Logs match the app's "Export diagnostics..." zip
+    (src/app/DiagnosticsExport.cpp); Source, Toolchain, and App build are script only, and
+    Application, Renderer, and Audio device exist only in the app export (they need the running app).
+    Settings show known fields only, never other values. Save the output with:
+        powershell -NoProfile -ExecutionPolicy Bypass -File scripts\diagnostics.ps1 > diagnostics.txt
 #>
-[CmdletBinding()]
-param(
-    [switch]$Deep,
-    [switch]$GlProbe
-)
+param()
 
-. (Join-Path $PSScriptRoot '_common.ps1')
+. "$PSScriptRoot\common.ps1"
 
 function Write-Section {
-    param([Parameter(Mandatory = $true)][string]$Title)
-    Write-Host ''
-    Write-Host "[$Title]" -ForegroundColor Cyan
+    param([Parameter(Mandatory)][string] $Title)
+    Write-Output ''
+    Write-Output "## $Title"
 }
 
 function Write-Item {
-    param(
-        [Parameter(Mandatory = $true)][string]$Label,
-        [AllowEmptyString()][AllowNull()][string]$Value
-    )
-    if ([string]::IsNullOrWhiteSpace($Value)) {
-        $Value = '(not found)'
-    }
-    Write-Host ('  {0,-22} {1}' -f $Label, (Protect-SndsText -Text $Value))
+    param([Parameter(Mandatory)][string] $Name, [AllowNull()][AllowEmptyString()][string] $Value)
+    Write-Output (Protect-Path ("{0,-24} {1}" -f "${Name}:", $Value))
 }
 
-function Get-FirstLine {
-    param([string[]]$Lines)
-    $first = @($Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) | Select-Object -First 1
-    if ($null -eq $first) {
-        return ''
+function Invoke-Section {
+    # Runs one section; a failure is reported in place instead of ending the report.
+    param([Parameter(Mandatory)][string] $Title, [Parameter(Mandatory)][scriptblock] $Body)
+    Write-Section $Title
+    try {
+        & $Body
+    } catch {
+        Write-Output (Protect-Path "unavailable: $($_.Exception.Message)")
     }
-    return $first.Trim()
 }
 
-function Get-ToolVersion {
-    param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [string[]]$ArgumentList = @('--version')
-    )
-    $path = Get-SndsCommandPath -Name $Name
-    if (-not $path) {
-        return ''
+function Get-NativeOutput {
+    # First lines of a program's stdout, or a note if it failed. Never throws.
+    param([Parameter(Mandatory)][string] $FilePath, [string[]] $ArgumentList = @(), [int] $Lines = 1)
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & $FilePath @ArgumentList 2> $null
+    } catch {
+        return "failed: $($_.Exception.Message)"
     }
-    return "$(Get-FirstLine (Get-SndsNativeOutput -FilePath $path -ArgumentList $ArgumentList))  ($path)"
+    if ($LASTEXITCODE -ne 0) {
+        return "failed with exit code $LASTEXITCODE"
+    }
+    return (@($output) | Select-Object -First $Lines) -join '; '
 }
 
-function Get-FreeSpace {
-    param([Parameter(Mandatory = $true)][string]$Path)
-    $qualifier = Split-Path -Path $Path -Qualifier
-    $drive = Get-PSDrive -Name $qualifier.TrimEnd(':') -PSProvider FileSystem -ErrorAction SilentlyContinue
-    if ($null -eq $drive) {
-        return ''
-    }
-    return '{0}  {1:N1} GB free of {2:N1} GB' -f $qualifier, ($drive.Free / 1GB), (($drive.Used + $drive.Free) / 1GB)
+function Format-Bytes {
+    param([double] $Bytes)
+    return '{0:N1} GB' -f ($Bytes / 1GB)
 }
 
-Invoke-SndsScript {
-    Write-Host "SNDS diagnostics  $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))"
+Write-Output "# SNDS diagnostics"
+Write-Item 'Generated' (Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')
+Write-Item 'Repository' $SndsRepoRoot
 
-    Write-Section 'System'
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    $cpu = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+Invoke-Section 'Source' {
+    $git = Get-Command git -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) {
+        Write-Item 'Commit' 'git not found'
+        return
+    }
+    Write-Item 'Commit' (Get-NativeOutput $git.Source @('-C', $SndsRepoRoot, 'log', '-1', '--format=%h %s'))
+    $ErrorActionPreference = 'Continue'
+    $changes = @(& $git.Source -C $SndsRepoRoot status --porcelain 2> $null).Count
+    Write-Item 'Uncommitted changes' "$changes"
+}
+
+Invoke-Section 'System' {
+    $os = Get-CimInstance Win32_OperatingSystem
     Write-Item 'OS' "$($os.Caption) $($os.Version) ($($os.OSArchitecture))"
-    Write-Item 'CPU' "$($cpu.Name.Trim()) ($($cpu.NumberOfCores) cores, $($cpu.NumberOfLogicalProcessors) threads)"
-    Write-Item 'Memory' ('{0:N1} GB' -f ($os.TotalVisibleMemorySize / 1MB))
+    foreach ($cpu in @(Get-CimInstance Win32_Processor)) {
+        Write-Item 'CPU' "$($cpu.Name.Trim()) ($($cpu.NumberOfCores) cores, $($cpu.NumberOfLogicalProcessors) threads)"
+    }
+    $computer = Get-CimInstance Win32_ComputerSystem
+    Write-Item 'RAM' (Format-Bytes $computer.TotalPhysicalMemory)
+    foreach ($gpu in @(Get-CimInstance Win32_VideoController)) {
+        Write-Item 'GPU' "$($gpu.Name) (driver $($gpu.DriverVersion))"
+    }
+    $smi = Get-Command nvidia-smi -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($smi) {
+        $query = Get-NativeOutput $smi.Source @('--query-gpu=name,driver_version,memory.total', '--format=csv,noheader') 4
+        Write-Item 'nvidia-smi' $query
+    } else {
+        Write-Item 'nvidia-smi' 'not found'
+    }
+}
+
+Invoke-Section 'Toolchain' {
+    $uv = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    Write-Item 'uv' $(if ($uv) { Get-NativeOutput $uv.Source @('--version') } else { 'not found' })
+    try {
+        $cmake = Get-CMake
+        Write-Item 'CMake' "$(Get-NativeOutput $cmake @('--version')) ($cmake)"
+    } catch {
+        Write-Item 'CMake' 'not found'
+    }
+    $vs = Get-VisualStudioPath
+    if ($vs) {
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        $name = Get-NativeOutput $vswhere @('-path', $vs, '-property', 'displayName')
+        $version = Get-NativeOutput $vswhere @('-path', $vs, '-property', 'catalog_productDisplayVersion')
+        Write-Item 'Visual Studio' "$name $version"
+        $toolsFile = Join-Path $vs 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+        if (Test-Path -LiteralPath $toolsFile) {
+            Write-Item 'MSVC toolset' (Get-Content -LiteralPath $toolsFile -TotalCount 1).Trim()
+        }
+    } else {
+        Write-Item 'Visual Studio' 'no installation with the x64 C++ tools found'
+    }
     Write-Item 'PowerShell' "$($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
-    foreach ($adapter in @(Get-CimInstance -ClassName Win32_VideoController)) {
-        Write-Item 'Display adapter' "$($adapter.Name) (driver $($adapter.DriverVersion))"
-    }
+}
 
-    Write-Section 'Repository'
-    Write-Item 'Root' $SndsRepoRoot
-    $git = Get-SndsCommandPath -Name 'git'
-    if ($git) {
-        $commit = Get-FirstLine (Get-SndsNativeOutput -FilePath $git -ArgumentList @('-C', $SndsRepoRoot, 'rev-parse', '--short', 'HEAD'))
-        $branch = Get-FirstLine (Get-SndsNativeOutput -FilePath $git -ArgumentList @('-C', $SndsRepoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'))
-        $changes = @(Get-SndsNativeOutput -FilePath $git -ArgumentList @('-C', $SndsRepoRoot, 'status', '--porcelain')).Count
-        Write-Item 'Commit' "$commit on $branch ($changes changed paths)"
+Invoke-Section 'Data directories' {
+    $snds = Get-SndsHome
+    $source = if ("$env:SNDS_HOME".Trim()) { 'SNDS_HOME' } else { 'default' }
+    Write-Item 'SNDS home' "$snds ($source)"
+    foreach ($entry in @('settings.json', 'cache', 'jobs', 'logs', 'models')) {
+        $path = Join-Path $snds $entry
+        Write-Item $entry $(if (Test-Path -LiteralPath $path) { 'present' } else { 'missing' })
     }
-    else {
-        Write-Item 'Commit' ''
-    }
+}
 
-    Write-Section 'Toolchain'
-    Write-Item 'git' (Get-ToolVersion -Name 'git')
-    Write-Item 'cmake' (Get-ToolVersion -Name 'cmake')
-    Write-Item 'ninja' (Get-ToolVersion -Name 'ninja')
-    $vs = Get-SndsVisualStudio
-    if ($null -ne $vs) {
-        Write-Item 'Visual Studio' "$($vs.displayName) $($vs.installationVersion)"
-        $msvcRoot = Join-Path $vs.installationPath 'VC\Tools\MSVC'
-        $toolsets = @(Get-ChildItem -LiteralPath $msvcRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-        Write-Item 'MSVC toolsets' ($toolsets -join ', ')
+Invoke-Section 'Model' {
+    $path = Join-Path (Get-SndsHome) 'models\htdemucs\955717e8-8726e21a.th'
+    Write-Item 'Path' $path
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        Write-Item 'Status' 'missing (run scripts\bootstrap.ps1)'
+        return
     }
-    else {
-        Write-Item 'Visual Studio' ''
-    }
-    Write-Item 'uv' (Get-ToolVersion -Name 'uv')
-    Write-Item 'clang-format (pinned)' "$SndsClangFormatVersion via uv tool run"
+    $size = (Get-Item -LiteralPath $path).Length
+    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $verified = ($size -eq 84141911) -and ($hash -eq '8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4')
+    Write-Item 'Size' "$size bytes"
+    Write-Item 'SHA-256' $hash
+    Write-Item 'Status' $(if ($verified) { 'verified' } else { 'MISMATCH (run scripts\bootstrap.ps1 to download it again)' })
+}
 
-    Write-Section 'Worker'
-    Write-Item 'Project' $(if (Test-Path -LiteralPath (Join-Path $SndsWorkerDir 'pyproject.toml')) { Join-Path $SndsWorkerDir 'pyproject.toml' } else { '' })
-    Write-Item 'Lockfile' $(if (Test-Path -LiteralPath (Join-Path $SndsWorkerDir 'uv.lock')) { Join-Path $SndsWorkerDir 'uv.lock' } else { '' })
-    if (Test-Path -LiteralPath $SndsWorkerPython) {
-        Write-Item 'Python' "$(Get-FirstLine (Get-SndsNativeOutput -FilePath $SndsWorkerPython -ArgumentList @('--version')))  ($SndsWorkerPython)"
-        # Python snippets avoid double quotes: Windows PowerShell 5.1 does not escape them for native commands.
-        $versionsScript = @'
-import importlib.metadata as m
-for name in ('torch', 'demucs', 'numpy', 'soundfile', 'pytest', 'ruff'):
-    try:
-        print(name + '=' + m.version(name))
-    except m.PackageNotFoundError:
-        print(name + '=(not installed)')
-'@
-        foreach ($line in @(Get-SndsNativeOutput -FilePath $SndsWorkerPython -ArgumentList @('-c', $versionsScript))) {
-            $parts = $line.Split('=', 2)
-            if ($parts.Count -eq 2) {
-                Write-Item $parts[0] $parts[1]
+Invoke-Section 'Worker environment' {
+    Write-Item 'Python' $SndsWorkerPython
+    if (-not (Test-Path -LiteralPath $SndsWorkerPython)) {
+        Write-Item 'Status' 'missing (run scripts\bootstrap.ps1)'
+        return
+    }
+    $result = Invoke-WorkerJson 'readiness'
+    Write-Item 'readiness exit code' "$($result.ExitCode)"
+    if ($result.Payload) {
+        Write-Output (Protect-Path ($result.Payload | ConvertTo-Json -Depth 6))
+    } else {
+        Write-Output (Protect-Path "no JSON report; stdout was: $($result.Text)")
+    }
+}
+
+Invoke-Section 'Settings' {
+    # Known fields only, like the app's export: values of any other key are never printed.
+    $file = Join-Path (Get-SndsHome) 'settings.json'
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+        Write-Item 'Status' 'no settings file (defaults)'
+        return
+    }
+    try {
+        $settings = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+    } catch {
+        # The parser's message quotes the text, so it is not shown.
+        Write-Item 'Status' 'not valid JSON (contents not shown)'
+        return
+    }
+    # Missing keys read as absent (the repo scripts run in strict mode).
+    function Get-Field($Name) { $property = $settings.PSObject.Properties[$Name]; if ($property) { $property.Value } }
+    Write-Item 'Use the CPU only' $(if ((Get-Field 'forceCpu') -eq $true) { 'yes' } else { 'no' })
+    Write-Item 'Audio device' $(if ("$(Get-Field 'audioDevice')") { 'chosen by the user' } else { 'system default' })
+    $recent = @(Get-Field 'recentSongs')
+    Write-Item 'Recent songs' "$($recent.Count)"
+    foreach ($song in $recent) {
+        if ($song.key) {
+            $key = "$($song.key)"
+            Write-Output (Protect-Path ("  {0}  {1}  {2}" -f $key.Substring(0, [Math]::Min(12, $key.Length)), $song.title, $song.path))
+        }
+    }
+    $known = 'format', 'version', 'forceCpu', 'audioDevice', 'recentSongs'
+    $other = @($settings.PSObject.Properties.Name | Where-Object { $known -notcontains $_ })
+    if ($other.Count) {
+        Write-Item 'Other keys' "$($other -join ', ') (values not shown)"
+    }
+}
+
+Invoke-Section 'Cache' {
+    $cache = Join-Path (Get-SndsHome) 'cache'
+    if (-not (Test-Path -LiteralPath $cache -PathType Container)) {
+        Write-Item 'Songs' 'no cache folder'
+        return
+    }
+    $folders = @(Get-ChildItem -LiteralPath $cache -Directory)
+    $total = 0
+    foreach ($folder in $folders) {
+        $size = (Get-ChildItem -LiteralPath $folder.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+        $total += $size
+        $json = Join-Path $folder.FullName 'song.json'
+        $status = 'no song.json'
+        $name = ''
+        if (Test-Path -LiteralPath $json -PathType Leaf) {
+            try {
+                $song = Get-Content -LiteralPath $json -Raw | ConvertFrom-Json
+                $status = "$($song.status)"
+                $name = "$($song.source.fileName)"
+            } catch {
+                $status = 'unreadable song.json'
             }
         }
-        if ($Deep) {
-            $cudaScript = 'import torch; print(torch.cuda.is_available(), torch.version.cuda, torch.cuda.get_device_name(0) if torch.cuda.is_available() else ''-'')'
-            Write-Item 'torch CUDA' (Get-FirstLine (Get-SndsNativeOutput -FilePath $SndsWorkerPython -ArgumentList @('-c', $cudaScript)))
-        }
+        Write-Output (Protect-Path ("  {0}  {1,-12} {2,8}  {3}" -f $folder.Name.Substring(0, [Math]::Min(12, $folder.Name.Length)), $status, ('{0:N1} MB' -f ($size / 1MB)), $name))
     }
-    else {
-        Write-Item 'Python' "missing ($SndsWorkerPython); run scripts\bootstrap.ps1"
-    }
+    Write-Item 'Songs' "$($folders.Count) folder(s)"
+    Write-Item 'Cache size' ('{0:N1} MB' -f ($total / 1MB))
+}
 
-    Write-Section 'NVIDIA'
-    $nvidiaSmi = Get-SndsCommandPath -Name 'nvidia-smi'
-    if ($nvidiaSmi) {
-        foreach ($line in @(Get-SndsNativeOutput -FilePath $nvidiaSmi -ArgumentList @('--query-gpu=name,driver_version,memory.total', '--format=csv,noheader'))) {
-            Write-Item 'GPU' $line
-        }
+Invoke-Section 'Logs' {
+    $logs = Join-Path (Get-SndsHome) 'logs'
+    Write-Item 'Folder' $logs
+    if (-not (Test-Path -LiteralPath $logs -PathType Container)) {
+        Write-Item 'Included' 'no logs folder'
+        return
     }
-    else {
-        Write-Item 'nvidia-smi' ''
+    $files = @(Get-ChildItem -LiteralPath $logs -File -Filter '*.log*' | Sort-Object LastWriteTime -Descending)
+    Write-Item 'Included' "$($files.Count) file(s)"
+    foreach ($file in $files) {
+        Write-Output (Protect-Path ("  {0}  {1:N0} KB" -f $file.Name, ($file.Length / 1KB)))
     }
-
-    Write-Section 'Storage'
-    $dataRoot = Get-SndsDataRoot
-    Write-Item 'Repository drive' (Get-FreeSpace -Path $SndsRepoRoot)
-    Write-Item 'Data drive' (Get-FreeSpace -Path $dataRoot)
-
-    Write-Section 'SNDS data'
-    Write-Item 'Root' $dataRoot
-    foreach ($name in @('settings', 'cache', 'jobs', 'logs', 'models')) {
-        $folder = Join-Path $dataRoot $name
-        if (Test-Path -LiteralPath $folder) {
-            $bytes = (Get-ChildItem -LiteralPath $folder -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
-            if ($null -eq $bytes) {
-                $bytes = 0
-            }
-            Write-Item $name ('{0}  ({1:N1} MB)' -f $folder, ($bytes / 1MB))
-        }
-        else {
-            Write-Item $name "$folder (not created yet)"
-        }
+    # The app's export zips each log; here the end of the newest app log is enough for a report.
+    $app = Join-Path $logs 'app.log'
+    if (Test-Path -LiteralPath $app -PathType Leaf) {
+        Write-Output ''
+        Write-Output 'Last lines of app.log:'
+        Get-Content -LiteralPath $app -Tail 20 | ForEach-Object { Write-Output (Protect-Path "  $_") }
     }
+}
 
-    Write-Section 'Build outputs'
-    foreach ($config in @('Debug', 'Release')) {
-        foreach ($name in @('SNDS', 'snds_tests', 'snds_gl_probe')) {
-            $exe = Get-SndsExecutable -Name $name -Config $config
+Invoke-Section 'App build' {
+    foreach ($config in $SndsConfigurations) {
+        foreach ($exe in @((Get-AppExecutable $config), (Join-Path $SndsBuildDir "snds_tests_artefacts\$config\snds_tests.exe"))) {
+            $label = "$config $(Split-Path -Leaf $exe)"
             if (Test-Path -LiteralPath $exe) {
-                Write-Item "$config $name" "$exe  ($((Get-Item -LiteralPath $exe).LastWriteTime.ToString('yyyy-MM-dd HH:mm')))"
+                Write-Item $label "built $((Get-Item -LiteralPath $exe).LastWriteTime.ToString('yyyy-MM-dd HH:mm'))"
+            } else {
+                Write-Item $label 'not built'
             }
-            else {
-                Write-Item "$config $name" ''
-            }
-        }
-    }
-
-    if ($GlProbe) {
-        Write-Section 'OpenGL probe'
-        $probe = Get-SndsExecutable -Name 'snds_gl_probe' -Config 'Release'
-        if (-not (Test-Path -LiteralPath $probe)) {
-            $probe = Get-SndsExecutable -Name 'snds_gl_probe' -Config 'Debug'
-        }
-        if (Test-Path -LiteralPath $probe) {
-            foreach ($line in @(Get-SndsNativeOutput -FilePath $probe -ArgumentList @('--run-ms=3000'))) {
-                Write-Host "  $(Protect-SndsText -Text $line)"
-            }
-        }
-        else {
-            Write-Item 'snds_gl_probe' 'not built; run scripts\build.ps1'
         }
     }
 }
+
+exit 0

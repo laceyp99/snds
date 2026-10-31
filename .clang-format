@@ -1,54 +1,57 @@
-# Pragmatic JUCE-like style: Allman braces, 4-space indent, space before non-empty call parentheses.
-# Checked by scripts\lint.ps1 with the clang-format version pinned in scripts\_common.ps1.
----
+# C++ style for SNDS-owned code (src/, tests/cpp/), following JUCE conventions: Allman braces,
+# four-space indents, and a space before call and declaration parentheses. Apply it with
+# scripts\format.ps1, which pins the clang-format version.
 Language: Cpp
-BasedOnStyle: LLVM
 Standard: c++20
+BasedOnStyle: LLVM
+
 ColumnLimit: 120
 IndentWidth: 4
 TabWidth: 4
 UseTab: Never
-LineEnding: LF
-InsertNewlineAtEOF: true
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+ConstructorInitializerIndentWidth: 4
+NamespaceIndentation: None
+IndentCaseLabels: true
+LambdaBodyIndentation: Signature
 
 BreakBeforeBraces: Allman
-AccessModifierOffset: -4
-IndentCaseLabels: true
-NamespaceIndentation: None
-FixNamespaceComments: true
-
-AlignAfterOpenBracket: Align
-AlignEscapedNewlines: Left
-AlignTrailingComments: true
-AllowAllArgumentsOnNextLine: false
-AllowAllParametersOfDeclarationOnNextLine: false
-AllowShortBlocksOnASingleLine: Never
-AllowShortCaseLabelsOnASingleLine: false
-AllowShortFunctionsOnASingleLine: Inline
-AllowShortIfStatementsOnASingleLine: Never
-AllowShortLambdasOnASingleLine: All
-AllowShortLoopsOnASingleLine: false
-AlwaysBreakTemplateDeclarations: Yes
-BinPackArguments: false
-BinPackParameters: false
 BreakBeforeBinaryOperators: NonAssignment
 BreakConstructorInitializers: BeforeColon
-ConstructorInitializerIndentWidth: 4
 PackConstructorInitializers: Never
-Cpp11BracedListStyle: false
+BreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: OnePerLine
+AlignAfterOpenBracket: Align
+AlignOperands: AlignAfterOperator
+AlignTrailingComments: true
+PenaltyReturnTypeOnItsOwnLine: 200
 
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortLambdasOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+
+SpaceBeforeParens: NonEmptyParentheses
+SpaceAfterLogicalNot: true
+SpaceAfterCStyleCast: true
+SpaceBeforeCpp11BracedList: true
+Cpp11BracedListStyle: false
+SpacesInContainerLiterals: true
 PointerAlignment: Left
 ReferenceAlignment: Left
 
-SpaceAfterCStyleCast: true
-SpaceAfterLogicalNot: true
-SpaceBeforeParens: NonEmptyParentheses
-SpaceBeforeCpp11BracedList: true
-SpaceInEmptyBlock: false
-
+FixNamespaceComments: true
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+MaxEmptyLinesToKeep: 1
 KeepEmptyLines:
   AtStartOfBlock: false
-MaxEmptyLinesToKeep: 1
-SortIncludes: CaseSensitive
-IncludeBlocks: Preserve
-...
+  AtStartOfFile: false
+InsertNewlineAtEOF: true
+# Keep each file's existing line endings: Git converts them, and CRLF checkouts must pass -Check.
+LineEnding: DeriveLF
