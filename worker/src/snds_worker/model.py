@@ -12,6 +12,7 @@ import hashlib
 import http.client
 import logging
 import os
+import ssl
 import tempfile
 import time
 import urllib.error
@@ -102,7 +103,13 @@ def fetch(
     for attempt in range(1, attempts + 1):
         try:
             return _fetch_once(destination, url, expected_sha256, expected_size, timeout=timeout)
-        except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError):
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            ssl.SSLError,
+            ConnectionError,
+            TimeoutError,
+        ):
             if attempt == attempts:
                 raise
             log.warning("Download attempt %d/%d failed; retrying", attempt, attempts)

@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import http.client
 import io
+import ssl
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -94,7 +96,7 @@ def test_pinned_checkpoint_constants() -> None:
     assert len(model.MODEL_SHA256) == 64
 
 
-@pytest.mark.parametrize("failure", ["short", "http"])
+@pytest.mark.parametrize("failure", ["short", "http", "ssl_read"])
 def test_interrupted_download_is_retried(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
@@ -106,6 +108,8 @@ def test_interrupted_download_is_retried(
         if calls == 1 and failure == "http":
             raise http.client.RemoteDisconnected("closed early")
         response = io.BytesIO(CONTENT[:10] if calls == 1 else CONTENT)
+        if calls == 1 and failure == "ssl_read":
+            response.read = Mock(side_effect=[CONTENT[:10], ssl.SSLError("interrupted TLS read")])
         response.headers = {}  # type: ignore[attr-defined]
         return response
 
@@ -119,8 +123,9 @@ def test_interrupted_download_is_retried(
     assert leftovers(tmp_path) == []
 
 
-def test_truncated_download_exhausts_retries_without_replacing_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("failure", ["short", "ssl_read"])
+def test_interrupted_download_exhausts_retries_without_replacing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
 ) -> None:
     calls = 0
 
@@ -128,6 +133,8 @@ def test_truncated_download_exhausts_retries_without_replacing_file(
         nonlocal calls
         calls += 1
         response = io.BytesIO(CONTENT[:10])
+        if failure == "ssl_read":
+            response.read = Mock(side_effect=[CONTENT[:10], ssl.SSLError("interrupted TLS read")])
         response.headers = {}  # type: ignore[attr-defined]
         return response
 
@@ -136,7 +143,8 @@ def test_truncated_download_exhausts_retries_without_replacing_file(
     destination = tmp_path / "x.th"
     destination.write_bytes(b"old")
 
-    with pytest.raises(http.client.IncompleteRead):
+    expected_error = ssl.SSLError if failure == "ssl_read" else http.client.IncompleteRead
+    with pytest.raises(expected_error):
         model.fetch(destination, "https://example.test/model", SHA256, len(CONTENT))
     assert calls == 3
     assert destination.read_bytes() == b"old"
