@@ -52,10 +52,13 @@ These need something the normal suite does not assume. Each is skipped unless it
 | `SNDS_SNAPSHOT_DIR=<folder>` | Writes images of the stem cards with `--filter Phase4Snapshots` | |
 | `SNDS_E2E_HOME=<folder>`, `SNDS_E2E_TRACK=<file>` | `snds_tests.exe --e2e`: the real worker and model end to end (import, prepare, cancel at each stage, reopen, missing original, Locate) | `SNDS_E2E_HOME` is a scratch data folder with both checkpoints under `models\` (the run `bootstrap.ps1` made with `SNDS_HOME` set to it); **also set `SNDS_HOME` to the same folder**, or the first check fails. The track is only read. `SNDS_E2E_TRACK=testdata\asking42much-excerpt.wav` runs it on the committed excerpt; the whole `--e2e` run takes about a minute on the development laptop's GPU (the excerpt itself prepares in 5 s on the GPU, 28 s on the CPU) |
 | `SNDS_E2E_CUDA=1` | The GPU part of `--e2e`: detection, GPU separation, forced CPU, an injected GPU failure and the explicit CPU retry | Needs a working NVIDIA GPU |
-| `SNDS_RUN_MODEL_TESTS=1` | Python: the real `htdemucs` and `beat_this` checkpoints | `SNDS_TEST_MODEL_DIR` points at the checkpoint folder |
+| `SNDS_RUN_MODEL_TESTS=1` | Python: the real `htdemucs` and `beat_this` checkpoints | Reads installed checkpoints under `SNDS_HOME\models`, defaulting to `%LOCALAPPDATA%\snds\models`. `SNDS_TEST_MODEL_DIR` overrides only the Demucs checkpoint folder |
 | `SNDS_RUN_CUDA_TESTS=1` | Python: the real GPU readiness check | |
 
-Opt-in tests never touch `%LOCALAPPDATA%\snds`; use a scratch `SNDS_HOME`.
+Real-model tests read `htdemucs\955717e8-8726e21a.th` and `beat_this\small0.ckpt`
+under the models folder. An explicit opt-in fails if a required checkpoint is missing.
+These tests only read installed checkpoints and write results in pytest temporary folders.
+For other opt-in tests, use a scratch `SNDS_HOME` to keep writes out of `%LOCALAPPDATA%\snds`.
 
 ## Measured baselines
 

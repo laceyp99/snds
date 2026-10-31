@@ -1,10 +1,39 @@
 from __future__ import annotations
 
 import logging
+import os
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import pytest
+
+from snds_worker import model
+from snds_worker.paths import data_paths
+
+
+@pytest.fixture
+def real_checkpoint() -> Callable[[Literal["htdemucs", "beat_this"]], Path]:
+    """Resolve installed checkpoints only when real-model tests are explicitly enabled."""
+    if os.environ.get("SNDS_RUN_MODEL_TESTS") != "1":
+        pytest.skip("set SNDS_RUN_MODEL_TESTS=1 to run real checkpoint tests")
+
+    def resolve(name: Literal["htdemucs", "beat_this"]) -> Path:
+        if name == "htdemucs":
+            override = os.environ.get("SNDS_TEST_MODEL_DIR")
+            path = (
+                Path(override) / model.MODEL_FILENAME
+                if override
+                else model.model_path(data_paths())
+            )
+        else:
+            path = model.beat_model_path(data_paths())
+        if not path.is_file():
+            pytest.fail(f"SNDS_RUN_MODEL_TESTS=1 requires the {name} checkpoint at {path}")
+        return path
+
+    return resolve
 
 
 @pytest.fixture(autouse=True)

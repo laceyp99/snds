@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 from pathlib import Path
 
@@ -251,10 +250,6 @@ def test_pipeline_hands_the_source_mix_to_the_analyzer(tmp_path: Path) -> None:
 
 # --- Real checkpoint (opt in) ----------------------------------------------------------------
 
-REAL_CHECKPOINT = Path(os.environ.get("LOCALAPPDATA", ".")) / (
-    "snds-spikes/bpm-library-models/beat_this-small0.ckpt"
-)
-
 
 def drum_loop(rate: int, bpm_value: float, seconds: float) -> np.ndarray:
     """Kick, snare and hats at a fixed tempo (the spike's four-on-the-floor feel)."""
@@ -274,15 +269,11 @@ def drum_loop(rate: int, bpm_value: float, seconds: float) -> np.ndarray:
     return (audio / np.abs(audio).max() * 0.8).astype(np.float32)
 
 
-@pytest.mark.skipif(
-    os.environ.get("SNDS_RUN_MODEL_TESTS") != "1" or not REAL_CHECKPOINT.is_file(),
-    reason="set SNDS_RUN_MODEL_TESTS=1 (and fetch the beat_this checkpoint) to run the real model",
-)
 @pytest.mark.parametrize("target", [100.0, 128.0])
-def test_real_beat_this_finds_the_tempo(tmp_path: Path, target: float) -> None:
+def test_real_beat_this_finds_the_tempo(tmp_path: Path, target: float, real_checkpoint) -> None:
     directory = tmp_path / "beat_this"
     directory.mkdir()
-    shutil.copy(REAL_CHECKPOINT, directory / model.BEAT_MODEL_FILENAME)
+    shutil.copy(real_checkpoint("beat_this"), directory / model.BEAT_MODEL_FILENAME)
     mono = drum_loop(44_100, target, 30.0)
     decoded = DecodedSource(np.stack([mono, mono], axis=1), 44_100, 2, len(mono), "wav", "FLOAT")
     seen: list[float] = []

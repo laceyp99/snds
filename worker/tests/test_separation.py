@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import errno
-import os
 from pathlib import Path
 
 import pytest
@@ -221,28 +220,18 @@ def test_normalization_rejects_large_misalignment(tmp_path: Path) -> None:
 
 # --- Real checkpoint (opt in) ----------------------------------------------------------------
 
-MODEL_DIR = Path(
-    os.environ.get(
-        "SNDS_TEST_MODEL_DIR",
-        str(Path(os.environ.get("LOCALAPPDATA", ".")) / "snds-spikes" / "htdemucs-artifact"),
-    )
-)
 
-
-@pytest.mark.skipif(
-    os.environ.get("SNDS_RUN_MODEL_TESTS") != "1",
-    reason="set SNDS_RUN_MODEL_TESTS=1 to run the real htdemucs checkpoint",
-)
-def test_real_htdemucs_separates_and_stays_aligned(tmp_path: Path) -> None:
+def test_real_htdemucs_separates_and_stays_aligned(tmp_path: Path, real_checkpoint) -> None:
     from helpers import run_job, write_wav
 
     source = write_wav(tmp_path / "song.wav", 48_000, 9.0)
     seen = []
+    model_directory = real_checkpoint("htdemucs").parent
 
     run = run_job(
         tmp_path,
         source,
-        factory=lambda device, _dir: separation.DemucsSeparator(device, MODEL_DIR),
+        factory=lambda device, _dir: separation.DemucsSeparator(device, model_directory),
         on_event=lambda e: seen.append(e) if e["type"] == "progress" else None,
     )
 
