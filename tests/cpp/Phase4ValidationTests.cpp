@@ -13,6 +13,7 @@
 #include "FakeAudioDevice.h"
 #include "PlaybackTestKit.h"
 #include "app/MixService.h"
+#include "audio/Resampler.h"
 #include "dsp/MasterStage.h"
 #include "dsp/StemLevelStage.h"
 #include "ui/MixPanel.h"
@@ -205,8 +206,7 @@ public:
                     + juce::String (dsp::limiterCeiling, 3) + ")");
         expect (writes.load() > 1000, "the writer really ran");
         expect (finite, "no NaN or infinity reached the output");
-        // The limiter holds the mix at its ceiling; the sample-rate converter's filter may overshoot it a little.
-        expect (peak < static_cast<double> (dsp::limiterCeiling) * 1.15, "peak " + juce::String (peak, 3));
+        expect (peak <= static_cast<double> (dsp::limiterCeiling), "peak " + juce::String (peak, 6));
         expect (metersSane, "meters stayed finite, ordered and under the ceiling");
         expectEquals (static_cast<juce::int64> (allocations),
                       static_cast<juce::int64> (0),
@@ -216,6 +216,122 @@ public:
 };
 
 ParameterStormTests parameterStormTests;
+
+//==============================================================================
+class DeviceOutputCeilingTests final : public juce::UnitTest
+{
+public:
+    DeviceOutputCeilingTests()
+        : juce::UnitTest ("Device output ceiling", "snds")
+    {
+    }
+
+    void runTest() override
+    {
+        beginTest ("A bounded polarity step overshoots in the converter but stays limited in engine output");
+        constexpr int frames = 8192;
+        std::vector<float> input (frames), left (9000), right (9000);
+        for (int i = 0; i < frames; ++i)
+            input[static_cast<size_t> (i)] = step (i, 0);
+
+        audio::Resampler converter;
+        converter.prepare (rate, 48000.0, frames);
+        const float* rawInput[2] = { input.data(), input.data() };
+        float* rawOutput[2] = { left.data(), right.data() };
+        converter.push (rawInput, frames);
+        const auto produced = converter.pull (rawOutput, static_cast<int> (left.size()));
+        float rawPeak = 0.0f;
+        for (int i = 0; i < produced; ++i)
+            rawPeak = std::max (rawPeak, std::abs (left[static_cast<size_t> (i)]));
+        expect (rawPeak > 1.0f, "the fixture must reproduce interpolation overshoot before limiting");
+
+        for (const bool original : { false, true })
+        {
+            audio::PlaybackEngine engine;
+            engine.prepare (48000.0, 512);
+            expect (engine.load (sources (frames)));
+            expect (engine.setOriginalSelected (original));
+            engine.play();
+            check (renderOffline (engine, expectedOutputFrames (frames, rate, 48000.0), 113));
+        }
+
+        beginTest ("The ceiling holds across A/B changes, seeks, rate changes and mono output without allocations");
+        audio::PlaybackEngine engine;
+        engine.prepare (44100.0, 512);
+        expect (engine.load (sources (rate * 2)));
+        engine.play();
+        for (const double deviceRate : { 44100.0, 48000.0, 32000.0, 96000.0 })
+        {
+            engine.prepare (deviceRate, 512);
+            for (const bool original : { true, false })
+            {
+                expect (engine.setOriginalSelected (original));
+                check (renderOffline (engine, 4096, 257));
+                engine.seek (1024);
+                check (renderOffline (engine, 4096, 257));
+            }
+        }
+        float mono[512] {};
+        float* monoOutput[1] = { mono };
+        expect (engine.waitForReadAhead (512, 20000));
+        long long allocations;
+        {
+            const AllocationScope tracking;
+            engine.process (monoOutput, 1, 512);
+            allocations = tracking.allocations();
+        }
+        expectEquals (allocations, 0LL, "final limiting must not allocate in a mono callback");
+        expect (std::all_of (std::begin (mono),
+                             std::end (mono),
+                             [] (float value)
+                             { return std::isfinite (value) && std::abs (value) <= dsp::limiterCeiling; }));
+        expectEquals (engine.getUnderrunCount(), 0);
+    }
+
+private:
+    static float step (std::int64_t frame, int channel)
+    {
+        const auto value = (frame / 1024) % 2 == 0 ? -dsp::limiterCeiling : dsp::limiterCeiling;
+        return channel == 0 ? value : value * 0.25f;
+    }
+
+    static audio::PlaybackSources sources (std::int64_t frames)
+    {
+        audio::PlaybackSources result;
+        result.sampleRate = rate;
+        result.lengthFrames = frames;
+        for (int stem = 0; stem < audio::stemCount; ++stem)
+            result.stems[static_cast<size_t> (stem)] = std::make_unique<SyntheticSource> (
+                rate,
+                frames,
+                [stem] (std::int64_t frame, int channel) { return stem == 0 ? step (frame, channel) : 0.0f; });
+        result.original = std::make_unique<SyntheticSource> (
+            rate, frames, [] (std::int64_t frame, int channel) { return -step (frame, channel); });
+        return result;
+    }
+
+    void check (const Rendered& rendered)
+    {
+        expect (! rendered.timedOut && rendered.size() > 0);
+        bool bounded = true;
+        float stereoError = 0.0f;
+        float peak = 0.0f;
+        for (size_t i = 0; i < rendered.left.size(); ++i)
+        {
+            const auto l = rendered.left[i];
+            const auto r = rendered.right[i];
+            bounded = bounded && std::isfinite (l) && std::isfinite (r) && std::abs (l) <= dsp::limiterCeiling
+                   && std::abs (r) <= dsp::limiterCeiling;
+            stereoError = std::max (stereoError, std::abs (r - l * 0.25f));
+            peak = std::max (peak, std::abs (l));
+        }
+        expect (bounded, "final device samples must stay finite and at or below -0.3 dBFS");
+        expect (peak > 0.9f, "the ceiling must not be satisfied by silence");
+        expect (stereoError < 1.0e-7f, "limiting must preserve the linked stereo ratio");
+    }
+};
+
+DeviceOutputCeilingTests deviceOutputCeilingTests;
 
 //==============================================================================
 class UiSoloTruthTableTests final : public juce::UnitTest

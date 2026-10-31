@@ -72,9 +72,9 @@ int MixPanel::getPreferredHeight() const noexcept
 juce::String MixPanel::describeNote (const PlaybackView& view)
 {
     if (view.hasSong() && view.originalSelected)
-        return "Original is playing, unprocessed. These controls shape Stem Mix.";
+        return "Original is playing and bypasses mix controls. Output protection remains active.";
 
-    return "These controls shape the stems. Original plays unprocessed, so its level can differ.";
+    return "These controls shape Stem Mix. Original bypasses them; both modes use output protection.";
 }
 
 void MixPanel::setSong (const std::optional<OpenSong>& newSong)

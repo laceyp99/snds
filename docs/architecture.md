@@ -206,7 +206,8 @@ flowchart LR
     P -->|"send x 0.2"| RB[reverb bus] --> RV[shared reverb] --> SUM
     P -->|"send x 0.2"| DB[delay bus] --> DL[tempo delay] --> SUM
     P --> SUM["sum (float, no scaling)"]
-    SUM --> M[master gain] --> L["limiter -0.3 dBFS"] --> O[output]
+    SUM --> M[master gain] --> L["source limiter -0.3 dBFS"] --> AB["A/B Original"]
+    AB --> SRC[resampler] --> F[transport fades] --> DLIM["device limiter -0.3 dBFS"] --> O[output]
     L --> MM[master meter + limiter activity]
 ```
 
@@ -258,6 +259,11 @@ to integers, and `formatDisplay`/`formatExact`/`parseValue` give the UI its text
   instantly (so the output can never exceed it and the mix stays sample-aligned with the original),
   then the gain recovers over 100 ms and snaps back to exactly 1. The cost of zero latency is that
   heavy overs are hard-limited, so they should be rare (see "Headroom").
+- *Device-output protection*: `PlaybackEngine` uses another `MasterStage` at unity gain after
+  resampling and transport fades. It catches interpolation peaks and protects both Stem Mix and
+  Original with the same -0.3 dBFS sample ceiling. It adds no lookahead or latency, links stereo
+  gain, resets at seeks and device-rate changes, and performs no allocation or locking. This is
+  a device-sample ceiling, not an oversampled DAC true-peak guarantee.
 
 **Threads.** The message thread writes controls into the `ParameterStore` at any time. Writers are
 serialised by a mutex the audio thread never touches. Publication is a seqlock of relaxed atomic
@@ -269,7 +275,8 @@ allocates.
 
 **Metering and the Phase 5 hooks**
 - `meters()` returns a `MeterStore`: per stem the post-filter, post-fader, post-pan **peak** and
-  **RMS**, the master peak and RMS, `limiterInputPeak` and `limiterReductionDb`. One audio-thread
+  **RMS**, the source-rate master peak and RMS, `limiterInputPeak` and `limiterReductionDb`. The
+  final device limiter's additional reduction is not part of this snapshot. One audio-thread
   writer publishes a whole `MeterSnapshot` through a seqlock. Any thread calls
   `read(MeterSnapshot&)`, and `false` (a write kept colliding) means "keep the last values".
 - Ballistics are fixed and independent of block size: peak has instant attack and a 300 ms
@@ -280,7 +287,8 @@ allocates.
 
 **Headroom and what the UI should say about the limiter**
 - The internal sum is plain float with no scaling, so four full-scale stems can reach +12 dBFS
-  before the limiter. That is by design: the limiter is the single place the mix is brought down.
+  before the source limiter. That limiter controls the hot mix; the final device limiter also
+  catches conversion peaks and protects Original.
 - Effects are budgeted so they add little on top. Each send has a -14 dB pad, the reverb returns
   about 0.7x a noise send's level at return 1, and feedback is capped at 0.6 (a tone at the
   delay's resonance builds up to at most 2.5x). Measured with four full-scale noise stems, every
@@ -327,7 +335,7 @@ whole test executable (it declares the counter `extern`), so it must not define 
   `TempoFxSection` (tempo, reverb return, delay division/feedback/return). Sliders are
   `ParameterSlider`s: 0..1 along the parameter's UI scale, text in the parameter's own words.
   The panel polls at 30 Hz and pulls every control back from the store when its version changes.
-  A standing note says Original is unprocessed, so its level can differ from Stem Mix.
+  A standing note says Original bypasses mix controls and both modes retain output protection.
 - Tempo: typed (20 to 400), x1/2 or x2, or "Detected" to go back. The choice goes to the mix at
   once and is stored as `bpm.userOverride` by `writeBpmOverride` (`app/SongPackageEdit`): only that
   value's text in `song.json` is replaced, the result is parsed and validated, then swapped in

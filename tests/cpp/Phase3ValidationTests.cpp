@@ -18,6 +18,7 @@
 #include "audio/FrameSource.h"
 #include "audio/OriginalAlignment.h"
 #include "audio/PlaybackEngine.h"
+#include "dsp/MasterStage.h"
 #include "model/SongMetadata.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -998,12 +999,35 @@ public:
         engine.prepare (static_cast<double> (rate), 1024);
 
         //======================================================================
-        // 1. The whole track, Stem Mix then Original, bit-exact against direct file reads.
+        // This engine uses the unity stem sum. Apply its transport fade and final limiter to
+        // direct file reads, retaining the reference envelope across blocks.
+        auto processReference =
+            [&] (std::vector<float>& l, std::vector<float>& r, std::int64_t sinceStart, dsp::MasterStage& finalLimiter)
+        {
+            float* channels[2] = { l.data(), r.data() };
+            const float* input[2] = { l.data(), r.data() };
+
+            const auto fadeFrames = rampFrames (static_cast<double> (rate));
+            for (size_t i = 0; i < l.size() && sinceStart + static_cast<std::int64_t> (i) < fadeFrames; ++i)
+            {
+                const auto gain = static_cast<float> (sinceStart + static_cast<std::int64_t> (i) + 1)
+                                / static_cast<float> (fadeFrames);
+                l[i] *= gain;
+                r[i] *= gain;
+            }
+
+            finalLimiter.process (input, channels, static_cast<int> (l.size()));
+        };
+
+        // 1. The whole track, Stem Mix then Original, exact against processed direct file reads.
         for (const bool useOriginal : { false, true })
         {
             expect (engine.load (makeSources()));
             engine.setOriginalSelected (useOriginal);
             engine.play();
+
+            dsp::MasterStage finalLimiter;
+            finalLimiter.prepare (static_cast<double> (rate));
 
             std::vector<float> refL, refR, origL (4096), origR (4096);
             std::int64_t refStart = -1;
@@ -1039,15 +1063,16 @@ public:
                         {
                             referenceSum (refStart, 4096, refL, refR);
                         }
+
+                        processReference (refL, refR, refStart, finalLimiter);
                     }
 
                     const auto k = static_cast<size_t> (frame - refStart);
                     const bool exact =
                         left[static_cast<size_t> (i)] == refL[k] && right[static_cast<size_t> (i)] == refR[k];
-                    const bool faded = frame < ramp && isFadedCopy (left[static_cast<size_t> (i)], refL[k], ramp);
                     peak = std::max (peak, std::abs (left[static_cast<size_t> (i)]));
 
-                    if (! exact && ! faded && refL[k] != 0.0f)
+                    if (! exact)
                     {
                         ++mismatches;
 
@@ -1093,14 +1118,18 @@ public:
 
                 engine.setOriginalSelected (false);
                 engine.seek (target);
+                engine.play();                       // a previous window may have reached the end of a short fixture
                 renderOffline (engine, 20000, 1024); // settle (crossfade, ramps)
                 engine.seek (target);
+                engine.play();
                 const auto stems = renderOffline (engine, frames, 1024);
 
                 engine.setOriginalSelected (true);
                 engine.seek (target);
+                engine.play();
                 renderOffline (engine, 20000, 1024);
                 engine.seek (target);
+                engine.play();
                 const auto orig = renderOffline (engine, frames, 1024);
 
                 // Both renders restart from `target`; find where each one's full-gain audio begins and compare.
@@ -1173,29 +1202,36 @@ public:
 
             latencies.push_back (audibleAt);
             std::vector<float> refL, refR;
+            const auto seekRamp = rampFrames (static_cast<double> (rate));
+            const auto referenceFrames = seekRamp + 4096;
 
             if (useOriginal)
             {
-                refL.assign (4096, 0.0f);
-                refR.assign (4096, 0.0f);
+                refL.assign (static_cast<size_t> (referenceFrames), 0.0f);
+                refR.assign (static_cast<size_t> (referenceFrames), 0.0f);
                 float* ch[2] = { refL.data(), refR.data() };
-                referenceOriginal->read (target + ramp, ch, 4096);
+                referenceOriginal->read (target, ch, referenceFrames);
             }
             else
             {
-                referenceSum (target + ramp, 4096, refL, refR);
+                referenceSum (target, referenceFrames, refL, refR);
             }
+
+            dsp::MasterStage finalLimiter;
+            finalLimiter.prepare (static_cast<double> (rate));
+            processReference (refL, refR, 0, finalLimiter);
 
             bool found = false;
 
             for (std::int64_t k = 0; k + 4096 <= rendered.size() && ! found; ++k)
-                if (rendered.left[static_cast<size_t> (k)] == refL[0]
-                    && rendered.right[static_cast<size_t> (k)] == refR[0])
+                if (rendered.left[static_cast<size_t> (k)] == refL[static_cast<size_t> (seekRamp)]
+                    && rendered.right[static_cast<size_t> (k)] == refR[static_cast<size_t> (seekRamp)])
                 {
                     found = true;
 
                     for (int n = 0; n < 4096 && found; ++n)
-                        found = rendered.left[static_cast<size_t> (k + n)] == refL[static_cast<size_t> (n)];
+                        found = rendered.left[static_cast<size_t> (k + n)] == refL[static_cast<size_t> (seekRamp + n)]
+                             && rendered.right[static_cast<size_t> (k + n)] == refR[static_cast<size_t> (seekRamp + n)];
                 }
 
             expect (found,

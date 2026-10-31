@@ -11,8 +11,9 @@ inline constexpr float limiterCeiling = 0.96605088f; // 10^(-0.3 / 20)
 /** Master gain followed by a transparent safety limiter.
 
     The mix is summed in float with no internal scaling, so four full-scale stems plus effects may
-    exceed 0 dBFS inside the engine without clipping; this stage is the one place that brings it
-    back under the ceiling.
+    exceed 0 dBFS inside the engine without clipping; this stage brings it back under the ceiling.
+    PlaybackEngine also uses a unity-gain instance at device rate to catch interpolation peaks
+    and limit Original after conversion.
 
     Master gain (-inf..+6 dB, smoothed in the linear domain) runs first, then the limiter: a
     zero-latency, stereo-linked peak limiter. It leaves everything at or below the ceiling

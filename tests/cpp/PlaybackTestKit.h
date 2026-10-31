@@ -54,12 +54,12 @@ private:
     const int readDelayMs;
 };
 
-/** A never-zero, frame-unique (within 8191 frames) marker for stem `stem`. Multiples of 1/16384,
-    so sums of the four stems are exact in float whatever the order. */
+/** A never-zero, frame-unique (within 8191 frames) marker for stem `stem`. Multiples of 1/65536,
+    so sums of the four stems are exact in float whatever the order and stay below 0.5. */
 inline float stemMarker (int stem, std::int64_t frame, int channel)
 {
     const auto value = (frame * (2 * stem + 1) + 17 * channel + 5 * stem) % 8191 + 1;
-    return static_cast<float> (value) / 16384.0f;
+    return static_cast<float> (value) / 65536.0f;
 }
 
 inline float expectedUnitySum (std::int64_t frame, int channel)

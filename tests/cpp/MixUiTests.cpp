@@ -556,12 +556,14 @@ private:
         panel.refresh();
         expect (panel.master().isLimiterLit(), "the limiter indicator is lit");
 
-        beginTest ("MixControls: the panel's note says Original is unprocessed, and when Original is playing");
+        beginTest ("MixControls: the note explains Original bypass and shared output protection");
         PlaybackView view;
-        expect (MixPanel::describeNote (view).contains ("Original plays unprocessed"));
+        expect (MixPanel::describeNote (view).contains ("Original bypasses them"));
+        expect (MixPanel::describeNote (view).contains ("output protection"));
         view.state = PlaybackState::playing;
         view.originalSelected = true;
-        expect (MixPanel::describeNote (view).contains ("Original is playing, unprocessed"));
+        expect (MixPanel::describeNote (view).contains ("Original is playing and bypasses mix controls"));
+        expect (MixPanel::describeNote (view).contains ("Output protection"));
     }
 };
 

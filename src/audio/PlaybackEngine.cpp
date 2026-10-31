@@ -3,6 +3,7 @@
 #include "audio/PrefetchStream.h"
 #include "audio/Resampler.h"
 #include "audio/SeekTarget.h"
+#include "dsp/MasterStage.h"
 
 #include <algorithm>
 #include <cmath>
@@ -81,6 +82,8 @@ struct PlaybackEngine::Session
     void prepareResampler (double deviceRate)
     {
         resampler.prepare (sourceRate, deviceRate, config.chunkFrames);
+        outputLimiter.prepare (deviceRate);
+        outputLimiter.setGainDb (0.0f);
         tailPadding = resampler.getLookaheadFrames() + 2;
         rampLength = std::max (2, static_cast<int> (std::lround (deviceRate * rampSeconds)));
         rampIndex = 0;
@@ -144,6 +147,7 @@ struct PlaybackEngine::Session
         rampIndex = 0;
         resampler.reset();
         mix->reset();
+        outputLimiter.reset();
     }
 
     bool hasSafeReadAhead() noexcept
@@ -453,6 +457,12 @@ struct PlaybackEngine::Session
             }
         }
 
+        // Interpolation can exceed the source-rate ceiling. Limit the final device samples,
+        // including Original and transport fades, without adding latency or changing stereo balance.
+        const float* finalInput[2] = { left, right };
+        float* finalOutput[2] = { left, right };
+        outputLimiter.process (finalInput, finalOutput, produced);
+
         // Where the audio just stopped dead, the next start must fade in again.
         if (! ready || atEnd)
             rampIndex = 0;
@@ -481,6 +491,7 @@ struct PlaybackEngine::Session
     PrefetchThread prefetch;
     std::unique_ptr<StemMixStage> mix;
     Resampler resampler;
+    dsp::MasterStage outputLimiter;
     int safeFrames = 0;
     int tailPadding = 0;
     int wrapFade = 2;

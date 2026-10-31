@@ -7,6 +7,7 @@
 
 #include "app/MixService.h"
 #include "audio/PlaybackEngine.h"
+#include "audio/Resampler.h"
 #include "dsp/MixProcessor.h"
 #include "rendering/VisualController.h"
 #include "rendering/VisualHost.h"
@@ -510,8 +511,7 @@ private:
                     blockPeak = std::max ({ blockPeak, std::abs (l), std::abs (r) });
             }
 
-            if (blockPeak
-                > 1.15f) // the limiter holds 0.966; resampling a hard-limited peak rings up to about +1 dB (1.085 seen)
+            if (blockPeak > dsp::limiterCeiling)
                 ++stats.overRange;
 
             stats.peak = std::max (stats.peak.load(), blockPeak);
@@ -713,7 +713,9 @@ ScenarioResult runScenario (const ScenarioConfig& config)
         expect ((r).blocks > 50, juce::String (label) + ": the audio thread ran");                                     \
         expectEquals ((r).allocations, 0LL, juce::String (label) + ": no allocation in process()");                    \
         expectEquals ((r).nonFinite, 0LL, juce::String (label) + ": output finite");                                   \
-        expectEquals ((r).overRange, 0LL, juce::String (label) + ": output within full scale");                        \
+        expect ((r).overRange == 0,                                                                                    \
+                juce::String (label) + ": output peak " + juce::String ((r).peak, 6) + " exceeded the ceiling in "     \
+                    + juce::String ((r).overRange) + " blocks");                                                       \
         expectEquals ((r).underruns, 0, juce::String (label) + ": no underruns");                                      \
         expect ((r).peak > 0.05f, juce::String (label) + ": there was sound");                                         \
         expect ((r).maxBlockMs < 40.0, juce::String (label) + ": slowest block " + juce::String ((r).maxBlockMs, 2));  \
@@ -734,6 +736,7 @@ public:
         testFallbackIsReported();
         testContentionCpuTier();
         testOptInGpu();
+        testOptInOvershootProbe();
     }
 
 private:
@@ -813,6 +816,89 @@ private:
         // The tier may legitimately drop (a slow machine), but only down, with a reason.
         for (const auto& e : r.events)
             expect (e.cause != FallbackCause::none && static_cast<int> (e.to) >= static_cast<int> (e.from));
+    }
+
+    //==========================================================================
+    void testOptInOvershootProbe()
+    {
+        beginTest ("Opt-in deterministic probe: bounded source samples through the 44.1-to-48 kHz resampler");
+
+        if (juce::SystemStats::getEnvironmentVariable ("SNDS_OVERSHOOT_PROBE", {}) != "1")
+        {
+            logMessage ("skipped: set SNDS_OVERSHOOT_PROBE=1 to run the offline resampler probe");
+            return;
+        }
+
+        constexpr int sourceFrames = 4096;
+        constexpr int targetSourceFrame = 2048;
+        constexpr int radius = 64;
+        constexpr int outputCapacity = 4600;
+        constexpr float sourceCeiling = dsp::limiterCeiling;
+        audio::Resampler resampler;
+        resampler.prepare (44100.0, 48000.0, sourceFrames);
+
+        std::vector<float> source (sourceFrames, 0.0f), left (outputCapacity), right (outputCapacity);
+        float* outputChannels[2] = { left.data(), right.data() };
+        const auto targetOutputFrame =
+            static_cast<int> (std::lround (static_cast<double> (targetSourceFrame) / resampler.getRatio()));
+        std::array<float, 2 * radius + 1> weights {};
+
+        // Measure the exact linear coefficient of every nearby source frame at one output instant.
+        for (int offset = -radius; offset <= radius; ++offset)
+        {
+            std::fill (source.begin(), source.end(), 0.0f);
+            source[static_cast<std::size_t> (targetSourceFrame + offset)] = 1.0f;
+            resampler.reset();
+            const float* inputChannels[2] = { source.data(), source.data() };
+            resampler.push (inputChannels, sourceFrames);
+            const auto produced = resampler.pull (outputChannels, outputCapacity);
+            expect (produced > targetOutputFrame, "impulse probe produced target output");
+
+            if (produced > targetOutputFrame)
+                weights[static_cast<std::size_t> (offset + radius)] =
+                    left[static_cast<std::size_t> (targetOutputFrame)];
+        }
+
+        // Align each bounded source sample with the measured coefficient sign to maximize that output instant.
+        for (int offset = -radius; offset <= radius; ++offset)
+            source[static_cast<std::size_t> (targetSourceFrame + offset)] =
+                weights[static_cast<std::size_t> (offset + radius)] < 0.0f ? -sourceCeiling : sourceCeiling;
+
+        resampler.reset();
+        const float* inputChannels[2] = { source.data(), source.data() };
+        resampler.push (inputChannels, sourceFrames);
+        const auto produced = resampler.pull (outputChannels, outputCapacity);
+        float peak = 0.0f;
+
+        for (int i = 0; i < produced; ++i)
+            peak = std::max (peak, std::abs (left[static_cast<std::size_t> (i)]));
+
+        const auto optimizedTargetPeak = left[static_cast<std::size_t> (targetOutputFrame)];
+
+        std::fill (source.begin(), source.begin() + targetSourceFrame, -sourceCeiling);
+        std::fill (source.begin() + targetSourceFrame, source.end(), sourceCeiling);
+        resampler.reset();
+        resampler.push (inputChannels, sourceFrames);
+        const auto stepProduced = resampler.pull (outputChannels, outputCapacity);
+        float stepPeak = 0.0f;
+
+        for (int i = 0; i < stepProduced; ++i)
+            stepPeak = std::max (stepPeak, std::abs (left[static_cast<std::size_t> (i)]));
+
+        audio::Resampler bypass;
+        bypass.prepare (44100.0, 44100.0, sourceFrames);
+        bypass.push (inputChannels, sourceFrames);
+        const auto bypassProduced = bypass.pull (outputChannels, outputCapacity);
+        float bypassPeak = 0.0f;
+
+        for (int i = 0; i < bypassProduced; ++i)
+            bypassPeak = std::max (bypassPeak, std::abs (left[static_cast<std::size_t> (i)]));
+
+        logMessage ("bounded source ceiling " + juce::String (sourceCeiling, 6)
+                    + ", coefficient-aligned pattern target peak " + juce::String (optimizedTargetPeak, 6)
+                    + ", whole-output peak " + juce::String (peak, 6) + "; single polarity step peak "
+                    + juce::String (stepPeak, 6) + "; equal-rate bypass peak " + juce::String (bypassPeak, 6)
+                    + " at 44.1 -> 48 kHz");
     }
 
     //==========================================================================

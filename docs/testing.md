@@ -49,6 +49,7 @@ These need something the normal suite does not assume. Each is skipped unless it
 | `SNDS_REAL_DEVICE=1` | Opens the real default audio device and runs silently | |
 | `SNDS_RENDER_GL_TESTS=1` | Real OpenGL context checks | Needs a GPU |
 | `SNDS_RENDER_FULLSCREEN_TESTS=1` | A real fullscreen window (covers the display briefly) | |
+| `SNDS_OVERSHOOT_PROBE=1` | Offline resampler diagnostics in `--filter "Visual validation: renderer failure and contention"` | Reports output peaks for bounded source samples, a polarity step and equal-rate bypass; deliberately constructed signals, no audio device |
 | `SNDS_SNAPSHOT_DIR=<folder>` | Writes images of the stem cards with `--filter Phase4Snapshots` | |
 | `SNDS_E2E_HOME=<folder>`, `SNDS_E2E_TRACK=<file>` | `snds_tests.exe --e2e`: the real worker and model end to end (import, prepare, cancel at each stage, reopen, missing original, Locate) | `SNDS_E2E_HOME` is a scratch data folder with both checkpoints under `models\` (the run `bootstrap.ps1` made with `SNDS_HOME` set to it); **also set `SNDS_HOME` to the same folder**, or the first check fails. The track is only read. `SNDS_E2E_TRACK=testdata\asking42much-excerpt.wav` runs it on the committed excerpt; the whole `--e2e` run takes about a minute on the development laptop's GPU (the excerpt itself prepares in 5 s on the GPU, 28 s on the CPU) |
 | `SNDS_E2E_CUDA=1` | The GPU part of `--e2e`: detection, GPU separation, forced CPU, an injected GPU failure and the explicit CPU retry | Needs a working NVIDIA GPU |
@@ -133,6 +134,10 @@ track, Stem Mix and Original both play the whole 2:35 track bit-exactly against 
 by -28.5 to -35.3 dB at six positions (Demucs model error; the measured lag is 0), the same at a
 48 kHz device, and 40 random seeks into the real files are exact.
 
+Those historical measurements predate the final device-output limiter. The current real-file
+validator compares direct file reads with the expected transport fade and final limiter applied,
+so loud input can be reduced while frame alignment is still checked exactly.
+
 ### Phase 4: the mix
 
 - **Ephemeral mix.** `settings.json` keeps only `format`, `version`, `forceCpu`, `audioDevice` and
@@ -140,8 +145,11 @@ by -28.5 to -35.3 dB at six positions (Demucs model error; the measured lag is 0
   text file under the data folder (`EphemeralMix` tests).
 - **`Phase4Stress`**: another thread writes every parameter (extremes, resets, `resetMix`
   transactions) while the real engine plays through the sample-rate converter and is sought,
-  paused, stopped and looped: no NaN or infinity, the output stays at the limiter ceiling (plus a
-  little converter overshoot), meters stay finite and ordered, zero allocations in `process`.
+  paused, stopped and looped: no NaN or infinity, the final device output stays at or below
+  the limiter ceiling after conversion, meters stay finite and ordered, zero allocations in `process`.
+- **`Device output ceiling`**: a polarity step that overshoots in the raw converter stays bounded
+  through the engine for Stem Mix and Original. A/B switches, seeks, device-rate changes and mono
+  callbacks retain the ceiling and stereo balance without callback allocations.
 - **`Phase4SoloUi`**: mute and solo pressed on the stem cards, against four constant stems of
   different levels, give exactly `stemAudibility` in the real output (96 combinations; all 256
   with `SNDS_HEAVY_TESTS=1`); Reset mix clears them.

@@ -70,6 +70,7 @@ has the technical text.
 - **Stem Mix** plays the four stems through your mix. **Original** plays your source file at the
   same position. The two are exclusive and switching is click-free. Switching does not change your
   mix settings.
+  Both modes share final output protection at -0.3 dBFS, so peaks above that ceiling are reduced.
 - Before enabling Original, SNDS checks the source file's size and SHA-256 in the background,
   then checks alignment. A changed or unreadable original disables A/B while its prepared stems
   remain playable.
@@ -106,7 +107,9 @@ The **Tempo and effects** section has:
 - **Delay**: **Division** (1/4, 1/8, Dotted 1/8, 1/8T or 1/16), **Feedback** and **Return**.
 
 The **Master** section has the **Master gain** and a limiter indicator ("Limiter idle", or "Limiter -3.0 dB"
-while it works). The limiter always protects the output from clipping.
+while it works). The indicator describes limiting inside Stem Mix. A final safety limiter after
+sample-rate conversion keeps both Stem Mix and Original at or below -0.3 dBFS. Its additional
+gain reduction is not shown by this indicator.
 
 **Reset mix** puts every control back to its default.
 

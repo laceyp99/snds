@@ -20,7 +20,7 @@ namespace snds
     the store whenever the store changes (a reset). Mix state is never saved.
 
     The controls are for Stem Mix. When Original is selected a note says so, and a standing note
-    says Original is unprocessed, so its level can differ from Stem Mix.
+    explains that Original bypasses mix controls while both modes retain output protection.
 */
 class MixPanel final : public juce::Component, private juce::Timer
 {

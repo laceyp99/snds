@@ -116,7 +116,8 @@ public:
 
     //==============================================================================
     /** The audio callback. Writes `numFrames` to the first two channels of `output` (a mono
-        output gets the average); further channels are cleared. */
+        output gets the average); further channels are cleared. Final samples, including Original,
+        are stereo-linked limited to -0.3 dBFS after conversion and transport fades. */
     void process (float* const* output, int numChannels, int numFrames) noexcept;
 
     //==============================================================================
