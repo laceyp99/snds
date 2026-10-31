@@ -7,6 +7,17 @@ juce::File DataPaths::modelFile() const
     return modelsDirectory().getChildFile ("htdemucs").getChildFile ("955717e8-8726e21a.th");
 }
 
+std::unique_ptr<juce::FileOutputStream> DataPaths::acquireAppLock() const
+{
+    if (home.createDirectory().failed())
+        return {};
+
+    // On Windows JUCE opens output streams with FILE_SHARE_READ only. Holding this handle
+    // denies another writer and deletion, including through a junction or different casing.
+    // Leave the empty file in place: deleting it after unlocking would race the next owner.
+    return home.getChildFile (".snds.lock").createOutputStream();
+}
+
 std::optional<DataPaths> DataPaths::resolve (const juce::String& sndsHome,
                                              const juce::String& localAppData,
                                              const juce::File& workingDirectory)

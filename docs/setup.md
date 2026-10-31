@@ -129,6 +129,12 @@ model is not installed or is damaged, run `scripts\bootstrap.ps1` and press **Re
 
 Everything lives under `%LOCALAPPDATA%\snds`. Set `SNDS_HOME` to use another folder.
 
+Only one app instance can use a data folder at a time. A second launch shows a message and
+leaves the running instance's preparation, cache and settings alone. Separate `SNDS_HOME`
+folders can run independently. Automation exits with code 14 if ownership cannot be acquired;
+check for another running instance or an unwritable folder. The empty `.snds.lock` file stays
+in the folder after exit; its presence does not mean the app is still running.
+
 | Folder or file | Contents |
 |---|---|
 | `models\` | The checkpoints (never in the repository). |

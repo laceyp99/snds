@@ -69,6 +69,33 @@ public:
             if (custom.isNotEmpty())
                 expect (! actual->home.getFullPathName().endsWithIgnoreCase ("AppData\\Local\\snds"));
         }
+
+        beginTest ("App ownership excludes other writers to the same home and releases on close");
+        {
+            const test::ScopedTempDirectory temp;
+            const DataPaths first { temp.child ("home") };
+            auto owner = first.acquireAppLock();
+            expect (owner != nullptr);
+            expect (first.acquireAppLock() == nullptr, "a second handle must not acquire the same home");
+            const DataPaths alias { juce::File (first.home.getFullPathName().toUpperCase()) };
+            expect (alias.acquireAppLock() == nullptr, "different casing must not bypass ownership");
+            const DataPaths separate { temp.child ("other-home") };
+            auto independent = separate.acquireAppLock();
+            expect (independent != nullptr, "separate homes may run concurrently");
+            expect (! first.home.getChildFile (".snds.lock").deleteFile(),
+                    "the lock must not be replaceable while held");
+            owner.reset();
+            owner = first.acquireAppLock();
+            expect (owner != nullptr, "a leftover lock file must not prevent reopening");
+        }
+
+        beginTest ("An unusable home cannot acquire app ownership");
+        {
+            const test::ScopedTempDirectory temp;
+            const auto file = temp.child ("file");
+            expect (file.replaceWithText ("not a directory"));
+            expect (DataPaths { file }.acquireAppLock() == nullptr);
+        }
     }
 
 private:

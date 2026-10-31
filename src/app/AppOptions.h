@@ -18,7 +18,8 @@ struct AppOptions
 
     /** --smoke-exit-after-readiness: like --smoke-exit, but wait for the first readiness check
         and log its result. Exit code 0 ready, 10 not set up, 11 model missing, 12 error, or 1 if
-        the window, argument, or JUCE checks failed. Takes precedence over --smoke-exit.
+        the window, argument, or JUCE checks failed. Exit 14 means data-folder ownership could
+        not be acquired (also applies to other automation modes). Takes precedence over --smoke-exit.
     */
     bool smokeExitAfterReadiness = false;
 

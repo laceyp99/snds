@@ -48,14 +48,41 @@ public:
     const juce::String getApplicationName() override { return appinfo::name; }
     const juce::String getApplicationVersion() override { return appinfo::version(); }
 
-    // Single-instance behaviour is undecided until cache and audio-device ownership exist.
-    // Until then a second launch (for example a smoke run) must not silently hand off to an
-    // already running instance and exit with 0.
+    // Separate data homes may run independently. Ownership of a shared home is checked before
+    // starting any services, rather than silently accepting a second launch as a successful run.
     bool moreThanOneInstanceAllowed() override { return true; }
 
     void initialise (const juce::String&) override
     {
         options = AppOptions::parse (getCommandLineParameterArray());
+        paths = DataPaths::fromEnvironment();
+
+        if (paths.has_value())
+        {
+            homeLock = paths->acquireAppLock();
+
+            if (homeLock == nullptr)
+            {
+                setApplicationReturnValue (14);
+                const auto message =
+                    "SNDS could not lock its data folder:\n\n" + paths->home.getFullPathName()
+                    + "\n\nAnother SNDS instance may already be using it, or the folder is not writable. "
+                      "Close that instance or choose a writable SNDS_HOME folder.";
+                logError (message);
+
+                if (options.smokeExit || options.smokeExitAfterReadiness || options.exportDiagnostics != juce::File())
+                    quit();
+                else
+                    juce::AlertWindow::showAsync (juce::MessageBoxOptions()
+                                                      .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                                      .withTitle ("Cannot open SNDS data folder")
+                                                      .withMessage (message)
+                                                      .withButton ("OK"),
+                                                  [this] (int) { quit(); });
+                return;
+            }
+        }
+
         startServices();
         audio = std::make_unique<AudioService> (settings.get());
 
@@ -99,8 +126,6 @@ private:
     // to the debugger output when there is no log file) and the app carries on with defaults.
     void startServices()
     {
-        paths = DataPaths::fromEnvironment();
-
         if (paths.has_value())
         {
             logger = std::make_unique<RotatingFileLogger> (paths->logsDirectory().getChildFile ("app.log"));
@@ -201,6 +226,8 @@ private:
 
     AppOptions options;
     std::optional<DataPaths> paths;
+    // Declared before services so ownership is released after their destruction.
+    std::unique_ptr<juce::FileOutputStream> homeLock;
     std::unique_ptr<RotatingFileLogger> logger;
     std::unique_ptr<Settings> settings;
     std::unique_ptr<AudioService> audio;
