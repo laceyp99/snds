@@ -49,8 +49,9 @@ flagged default until the user sets a tempo.
 ## Fingerprint, cache, and import (Phase 2)
 
 - `validateSourceFile` (`model/SongImport`) checks WAV (PCM 16/24/32, float32) and MP3, mono or
-  stereo, up to 192 kHz. `extractEmbeddedArtwork` / `makeFallbackArtwork` (`model/Artwork`) supply
-  the artwork step; the result is an `ArtworkChoice` written to `jobs\<id>\artwork.<ext>`.
+  stereo, 8 to 192 kHz, at most 30 minutes. `extractEmbeddedArtwork` / `makeFallbackArtwork`
+  (`model/Artwork`) supply the artwork step; the result is an `ArtworkChoice` written to
+  `jobs\<id>\artwork.<ext>`.
 - `computeFingerprint` / `FingerprintJob` (`model/SourceFingerprint`) hash the source with
   Windows CNG on a background thread, with progress and cancel. The cache key is
   `<sha256>-<sizeBytes>`.
