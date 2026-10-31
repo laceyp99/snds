@@ -229,6 +229,16 @@ private:
             huge.sampleRate = 384000;
             expectRejected (validateWav (huge), ImportProblem::sampleRateTooHigh, "384.0 kHz");
 
+            for (const int lowRate : { 4000, 7999 })
+            {
+                WavSpec low;
+                low.sampleRate = lowRate;
+                expectRejected (validateWav (low), ImportProblem::sampleRateTooLow, "8 kHz");
+            }
+            WavSpec minimumRate;
+            minimumRate.sampleRate = 8000;
+            expect (validateWav (minimumRate).accepted(), "8 kHz is supported at the inclusive lower boundary");
+
             WavSpec silent;
             silent.frames = 0;
             expectRejected (validateWav (silent), ImportProblem::zeroLength, "empty");

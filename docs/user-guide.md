@@ -29,9 +29,9 @@ From top to bottom:
 
 ## Import a song
 
-1. Press **Import song...** and choose a WAV or MP3. The file must be mono or stereo, at most
-   192 kHz and 30 minutes, and WAV must be 16, 24 or 32-bit PCM or 32-bit float. Anything else is refused with a
-   sentence saying why and what to do.
+1. Press **Import song...** and choose a WAV or MP3. The file must be mono or stereo, 8 to
+   192 kHz, and at most 30 minutes long. WAV must be 16, 24 or 32-bit PCM or 32-bit float.
+   Anything else is refused with a sentence saying why and what to do.
 2. **Artwork.** SNDS looks for a cover picture inside the file (an MP3's ID3 tag, or an ID3 chunk
    in a WAV).
    - Found: "Artwork found in ...". Press **Use this**, **Choose image...** (PNG, JPEG or GIF), or

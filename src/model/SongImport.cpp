@@ -119,6 +119,11 @@ ImportResult checkStreamLimits (const juce::File& file, int channels, double sam
                        "this file has " + juce::String (channels)
                            + " channels. SNDS handles mono or stereo; mix it down to stereo first.");
 
+    if (sampleRate < importlimits::minSampleRate)
+        return reject (file,
+                       ImportProblem::sampleRateTooLow,
+                       "the sample rate is below 8 kHz. Resample it to at least 8 kHz and try again.");
+
     if (sampleRate > importlimits::maxSampleRate)
         return reject (file,
                        ImportProblem::sampleRateTooHigh,

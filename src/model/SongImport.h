@@ -31,6 +31,7 @@ enum class ImportProblem
     unsupportedBitDepth,
     tooManyChannels,
     sampleRateTooHigh,
+    sampleRateTooLow,
     zeroLength,
     tooLong
 };
@@ -47,12 +48,13 @@ struct ImportResult
 namespace importlimits
 {
 constexpr int maxChannels = 2;
+constexpr double minSampleRate = 8000.0;
 constexpr double maxSampleRate = 192000.0;
 constexpr double maxDurationSeconds = 30.0 * 60.0;
 } // namespace importlimits
 
 /** Checks that a file can be prepared: WAV (PCM 16/24/32-bit or float32) or MP3, mono or
-    stereo, at most 192 kHz and 30 minutes, not empty. Reads headers and the first audio only; it does not
+    stereo, 8 to 192 kHz and at most 30 minutes, not empty. Reads headers and the first audio only; it does not
     decode the whole file. Safe to call from a background thread.
 */
 ImportResult validateSourceFile (const juce::File& file);

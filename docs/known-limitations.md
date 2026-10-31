@@ -16,8 +16,8 @@ the behavior differs from what is written here.
 
 ## Songs and files
 
-- **WAV and MP3 only.** WAV must be 16, 24 or 32-bit PCM or 32-bit float; mono or stereo; at most
-  192 kHz. Other containers, codecs, and surround files are refused with a reason.
+- **WAV and MP3 only.** WAV must be 16, 24 or 32-bit PCM or 32-bit float; mono or stereo;
+  8 to 192 kHz. Other containers, codecs, and surround files are refused with a reason.
 - **One song and one preparation at a time.**
 - **The original file is not copied.** SNDS keeps the path, size and content hash. If the file
   moves, **Stem Mix** still plays from the cache, the **Stem Mix** and **Original** buttons are
