@@ -1,9 +1,21 @@
-* text=auto eol=lf
+# Store text with LF in the repository whatever each contributor's core.autocrlf says. Working
+# copies follow the local Git settings, except where a file type needs a fixed form.
+* text=auto
+
+# Windows-only scripts: CRLF in working copies, as Windows tools expect.
 *.ps1 text eol=crlf
-*.bat text eol=crlf
 *.cmd text eol=crlf
-*.wav binary
-*.mp3 binary
+*.bat text eol=crlf
+
+# Written by tools with LF; keeping them LF avoids rewrite churn in CRLF checkouts.
+uv.lock text eol=lf
+*.sh text eol=lf
+
+# Binary data
 *.png binary
 *.jpg binary
 *.ico binary
+*.wav binary
+*.mp3 binary
+*.flac binary
+*.th binary

@@ -1,0 +1,52 @@
+# Windows CI: lint, build, and test SNDS through the same scripts testers use.
+# The separation and BPM checkpoints are never downloaded here; the worker tests use a fake
+# separator, and the opt-in real-model, real-GPU, and real-device tests stay off.
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        # Windows PowerShell 5.1 is the supported shell for the scripts.
+        shell: powershell
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: '0.12.6'
+          enable-cache: true
+          cache-dependency-glob: worker/uv.lock
+
+      - name: Check the source archive (no weights, audio, local paths or secrets)
+        run: .\scripts\check-source-archive.ps1
+
+      - name: Sync the CPU worker environment (no model download)
+        run: .\scripts\bootstrap.ps1 -Compute cpu -SkipModel
+
+      - name: Check formatting and lint
+        run: .\scripts\format.ps1 -Check
+
+      - name: Build and test (Debug)
+        run: .\scripts\test.ps1 -Config Debug
+
+      - name: Build and test C++ (Release)
+        run: .\scripts\test.ps1 -Config Release -SkipPython

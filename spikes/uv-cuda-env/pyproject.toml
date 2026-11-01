@@ -1,0 +1,22 @@
+[project]
+name = "snds-uv-cuda-spike"
+version = "0.0.0"
+description = "Disposable dependency-resolution spike for the SNDS CUDA worker environment."
+requires-python = "==3.11.*"
+dependencies = [
+    "demucs==4.0.1",
+    "numpy==1.26.4",
+    "packaging==25.0",
+    "soundfile==0.12.1",
+    "torch==2.1.2",
+    "torchaudio==2.1.2",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }

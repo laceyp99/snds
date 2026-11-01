@@ -1,0 +1,12 @@
+site_name: SNDS
+site_description: A local visual remix instrument for Windows.
+# Build with: uvx --from mkdocs==1.6.1 mkdocs build --strict -d build\site
+# docs/ is the only content folder. README.md and THIRD_PARTY_NOTICES.md stay at the repository root.
+nav:
+  - Setup: setup.md
+  - User guide: user-guide.md
+  - Diagnostics: diagnostics.md
+  - Known limitations: known-limitations.md
+  - Testing: testing.md
+  - Architecture: architecture.md
+  - Worker protocol: protocol.md

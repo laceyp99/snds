@@ -1,117 +1,91 @@
 from __future__ import annotations
 
-import json
+import logging
 import os
-import shutil
-import uuid
+import urllib.request
+from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
-from snds_worker.client import RunResult, make_request, run_worker
-from snds_worker.model import CHECKPOINT_FILE, CHECKPOINT_SIZE, MODEL_NAME
-
-FAKE_ENV = {"SNDS_WORKER_TEST_SEPARATOR": "fake"}
-TEST_ENV_VARS = (
-    "SNDS_WORKER_TEST_SEPARATOR",
-    "SNDS_WORKER_TEST_SEGMENT_DELAY",
-    "SNDS_WORKER_TEST_FAULT",
-)
+from snds_worker import model
+from snds_worker.paths import data_paths
 
 
-def _default_checkpoint() -> Path | None:
-    base = os.environ.get("LOCALAPPDATA")
-    override = os.environ.get("SNDS_DATA_DIR", "").strip().strip('"')
-    root = (
-        Path(override)
-        if override and os.path.isabs(override)
-        else (Path(base) / "snds" if base else None)
-    )
-    if root is None:
-        return None
-    p = root / "models" / MODEL_NAME / CHECKPOINT_FILE
-    return p if p.is_file() and p.stat().st_size == CHECKPOINT_SIZE else None
+@pytest.fixture
+def real_checkpoint() -> Callable[[Literal["htdemucs", "beat_this"]], Path]:
+    """Resolve installed checkpoints only when real-model tests are explicitly enabled."""
+    if os.environ.get("SNDS_RUN_MODEL_TESTS") != "1":
+        pytest.skip("set SNDS_RUN_MODEL_TESTS=1 to run real checkpoint tests")
 
+    def resolve(name: Literal["htdemucs", "beat_this"]) -> Path:
+        if name == "htdemucs":
+            override = os.environ.get("SNDS_TEST_MODEL_DIR")
+            path = (
+                Path(override) / model.MODEL_FILENAME
+                if override
+                else model.model_path(data_paths())
+            )
+        else:
+            path = model.beat_model_path(data_paths())
+        if not path.is_file():
+            pytest.fail(f"SNDS_RUN_MODEL_TESTS=1 requires the {name} checkpoint at {path}")
+        return path
 
-REAL_CHECKPOINT = _default_checkpoint()
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    need_cuda = any(item.get_closest_marker("cuda") for item in items)
-    cuda_ok = False
-    if need_cuda:
-        try:
-            import torch
-
-            cuda_ok = bool(torch.cuda.is_available())
-        except ImportError:
-            cuda_ok = False
-    for item in items:
-        if item.get_closest_marker("model") and REAL_CHECKPOINT is None:
-            item.add_marker(pytest.mark.skip(reason="pinned htdemucs checkpoint not installed"))
-        if item.get_closest_marker("cuda") and not cuda_ok:
-            item.add_marker(pytest.mark.skip(reason="no usable CUDA device"))
+    return resolve
 
 
 @pytest.fixture(autouse=True)
-def _clean_test_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Child workers inherit os.environ; never leak test seams or a data-root override."""
-    for name in (*TEST_ENV_VARS, "SNDS_DATA_DIR"):
-        monkeypatch.delenv(name, raising=False)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Allow file:// downloads only; tests must never reach the network."""
+    real_urlopen = urllib.request.urlopen
+
+    def guarded_urlopen(request, *args, **kwargs):
+        url = request.full_url if isinstance(request, urllib.request.Request) else str(request)
+        if not url.startswith("file:"):
+            raise AssertionError(f"tests must not access the network: {url}")
+        return real_urlopen(request, *args, **kwargs)
+
+    monkeypatch.setattr(urllib.request, "urlopen", guarded_urlopen)
+
+
+@pytest.fixture(autouse=True)
+def reset_worker_logging():
+    """configure_logging() installs handlers on the root logger; remove them after each test so
+    that log files in temporary directories are closed."""
+    yield
+    root = logging.getLogger()
+    for handler in [h for h in root.handlers if getattr(h, "_snds_worker_handler", False)]:
+        root.removeHandler(handler)
+        handler.close()
 
 
 @pytest.fixture
-def data_root(tmp_path: Path) -> Path:
-    root = tmp_path / "data"
-    root.mkdir()
-    return root
-
-
-def link_model(root: Path) -> Path:
-    """Hard-link (same volume) or copy the real checkpoint into a test data root."""
-    assert REAL_CHECKPOINT is not None
-    d = root / "models" / MODEL_NAME
-    d.mkdir(parents=True, exist_ok=True)
-    dst = d / CHECKPOINT_FILE
-    if not dst.exists():
-        try:
-            os.link(REAL_CHECKPOINT, dst)
-        except OSError:
-            shutil.copyfile(REAL_CHECKPOINT, dst)
-    return dst
+def snds_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Points SNDS_HOME at a fresh, not yet created directory."""
+    home = tmp_path / "snds-home"
+    monkeypatch.setenv("SNDS_HOME", str(home))
+    return home
 
 
 @pytest.fixture
-def model_root(data_root: Path) -> Path:
-    link_model(data_root)
-    return data_root
+def home(tmp_path: Path) -> Path:
+    return tmp_path / "snds-home"
 
 
-def new_job_id() -> str:
-    return "t" + uuid.uuid4().hex[:20]
+@pytest.fixture
+def started(home: Path):
+    """Starts `prepare` worker subprocesses (fake separator) and kills any left running."""
+    from procs import Job
 
+    jobs: list[Job] = []
 
-def separate(
-    source: Path,
-    data_root: Path,
-    *,
-    env: dict[str, str] | None = None,
-    device: str = "auto",
-    job_id: str | None = None,
-    request: dict | str | None = None,
-    **kwargs,
-) -> RunResult:
-    req = (
-        request
-        if request is not None
-        else make_request(source, job_id or new_job_id(), device, data_root)
-    )
-    return run_worker("separate", request=req, env=env, **kwargs)
+    def start(env: dict[str, str] | None = None, argv: list[str] | None = None) -> Job:
+        job = Job(home, env, argv)
+        jobs.append(job)
+        return job
 
-
-def entry_dir(data_root: Path, result: RunResult) -> Path:
-    return Path(result.terminal["cache_dir"])
-
-
-def load_manifest(entry: Path) -> dict:
-    return json.loads((entry / "manifest.json").read_text(encoding="utf-8"))
+    yield start
+    for job in jobs:
+        job.kill()

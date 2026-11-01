@@ -1,43 +1,38 @@
-# Planning artifacts (kept local, never committed)
-plan.md
-decisions.md
-
-# C++ / CMake build output
-build/
-out/
-cmake-build-*/
+# Build trees. Scripts build into build/; IDEs may create the others.
+/build/
+/build-*/
+/out/
+/.vs/
 CMakeUserPresets.json
 *.user
-.vs/
 
-# Python environments and caches
+# Python worker environment and tool caches
 .venv/
-worker/.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
-.mypy_cache/
 *.egg-info/
 
-# Model weights and downloaded artifacts
-models/
+# Model weights. Bootstrap downloads the checkpoint into the SNDS data directory.
 *.th
-*.ckpt
 *.pt
 *.pth
+*.ckpt
 *.safetensors
 
-# Generated audio, caches, and logs
-cache/
-logs/
+# Logs and audio outputs. Settings, cache, jobs, logs, and models live under SNDS_HOME
+# (default %LOCALAPPDATA%\snds), never in the source tree. Rights-cleared fixtures belong in
+# testdata/.
 *.log
-spikes/output/
-testdata/generated/
+logs/
+*.wav
+*.mp3
+*.flac
+!/testdata/**/*.wav
+!/testdata/**/*.mp3
+!/testdata/**/*.flac
 
-# Editor / OS noise
-.vscode/
-.idea/
-Thumbs.db
-Desktop.ini
-.DS_Store
+# Local planning artifacts
+/plan.md
+/decisions.md

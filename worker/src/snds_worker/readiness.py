@@ -1,364 +1,315 @@
-"""``readiness``: machine-readable environment checks with actionable messages.
+"""Readiness report: can this environment run separation?
 
-Statuses match ``snds::ReadinessStatus``: ``ok``, ``warning`` (usable, deserves attention) and
-``missing`` (blocks separation until the user acts).
+Checks that the pinned packages are installed and import, that CPU inference works, which
+PyTorch build is present and whether CUDA passes a health check (a small kernel in a bounded
+child process), and that both checkpoints (htdemucs and the beat_this BPM model) exist with the
+pinned size and SHA-256. It is read-only: it creates no directories and writes no files.
 """
 
 from __future__ import annotations
 
-import logging
-import os
+import importlib
+import json
 import platform
-import shutil
+import subprocess
 import sys
+import time
+import traceback
+from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-from snds_worker import faults
-from snds_worker.cache import PIPELINE_ID, TEST_PIPELINE_ID
-from snds_worker.compute import CUDA_DEVICE, probe_cuda_bounded
-from snds_worker.model import checkpoint_path, describe, verify_checkpoint
-from snds_worker.paths import DataDirs
+from snds_worker import __version__, model
+from snds_worker.paths import DataPaths, HomeUnavailableError, data_paths
+from snds_worker.protocol import message, problem
 
-log = logging.getLogger(__name__)
+SETUP_HINT = r"Run scripts\bootstrap.ps1."
 
-BOOTSTRAP = "scripts\\bootstrap.ps1"
-PINNED = {
-    "numpy": "2.5.3",
-    "scipy": "1.18.1",
-    "soundfile": "0.14.0",
-    "torch": "2.11.0",
-    "demucs": "4.1.0",
+# Distribution name -> module that separation will import.
+_IMPORTS = {
+    "numpy": "numpy",
+    "soundfile": "soundfile",
+    "torch": "torch",
+    "torchaudio": "torchaudio",
+    "demucs": "demucs.pretrained",
+    "beat-this": "beat_this.inference",
 }
-LOW_DISK_BYTES = 2 << 30
+
+_CUDA_PROBE = """
+import json, time
+started = time.perf_counter()
+import torch
+x = torch.randn(256, 256, device="cuda")
+y = (x @ x).sum()
+torch.cuda.synchronize()
+print(json.dumps({"ok": bool(torch.isfinite(y).item())}))
+"""
+CUDA_PROBE_TIMEOUT_SECONDS = 45.0
 
 
-def _check(
-    id_: str, title: str, status: str, detail: str, action: str = "", **data: Any
+def _package_versions(problems: list[dict[str, str]]) -> dict[str, str | None]:
+    versions: dict[str, str | None] = {}
+    for name in _IMPORTS:
+        try:
+            versions[name] = metadata.version(name)
+        except metadata.PackageNotFoundError:
+            versions[name] = None
+            problems.append(
+                problem(
+                    "package_missing",
+                    f"{name} is not installed in the worker environment. {SETUP_HINT}",
+                )
+            )
+    return versions
+
+
+def _import_packages(versions: Mapping[str, str | None], problems: list[dict[str, str]]) -> None:
+    for name, module in _IMPORTS.items():
+        if versions[name] is None:
+            continue
+        try:
+            importlib.import_module(module)
+        except Exception as error:
+            reason = f"{type(error).__name__}: {error}"
+            problems.append(
+                problem(
+                    "import_failed",
+                    f"{module} is installed but failed to import ({reason}).",
+                    traceback.format_exc(),
+                )
+            )
+
+
+def probe_cuda(timeout: float = CUDA_PROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
+    """Runs a small CUDA kernel in a throwaway process, so that a wedged driver is killed when
+    the timeout expires instead of hanging the readiness check.
+
+    Returns {"ok": bool, "ms": int} plus "error" when not ok.
+    """
+    started = time.monotonic()
+    try:
+        run = subprocess.run(
+            [sys.executable, "-I", "-c", _CUDA_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            stdin=subprocess.DEVNULL,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "ms": round(timeout * 1000), "error": f"timed out after {timeout:g} s"}
+    except OSError as error:
+        return {"ok": False, "ms": 0, "error": f"{type(error).__name__}: {error}"}
+
+    elapsed = round((time.monotonic() - started) * 1000)
+    if run.returncode == 0:
+        try:
+            if json.loads(run.stdout.strip().splitlines()[-1]).get("ok") is True:
+                return {"ok": True, "ms": elapsed}
+        except (ValueError, IndexError):
+            pass
+        return {"ok": False, "ms": elapsed, "error": "the CUDA kernel produced a wrong result"}
+
+    lines = [line for line in run.stderr.strip().splitlines() if line.strip()]
+    return {"ok": False, "ms": elapsed, "error": lines[-1] if lines else f"exit {run.returncode}"}
+
+
+def _compute(check_cuda: bool) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "torch_build": None,
+        "torch_cuda_version": None,
+        "cpu_available": False,
+        "cuda_available": False,
+        "cuda_healthy": False,
+        "cuda_device": None,
+        "device": None,
+    }
+
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return info
+
+    try:
+        info["cpu_available"] = bool(torch.ones(4).sum().item() == 4)
+    except Exception as error:
+        info["cpu_error"] = f"{type(error).__name__}: {error}"
+
+    cuda_version = getattr(torch.version, "cuda", None)
+    info["torch_build"] = "cuda" if cuda_version else "cpu"
+    info["torch_cuda_version"] = cuda_version
+
+    if cuda_version:
+        try:
+            if torch.cuda.is_available():
+                info["cuda_available"] = True
+                info["cuda_device"] = torch.cuda.get_device_name(0)
+        except Exception as error:  # a broken driver means CPU fallback, not "not ready"
+            info["cuda_error"] = f"{type(error).__name__}: {error}"
+
+    if info["cuda_available"] and check_cuda:
+        probe = probe_cuda()
+        info["cuda_healthy"] = probe["ok"]
+        info["cuda_check_ms"] = probe["ms"]
+        if not probe["ok"]:
+            info["cuda_error"] = probe.get("error", "the CUDA health check failed")
+
+    # "auto" compute uses CUDA only after the health check passed.
+    info["device"] = "cuda" if info["cuda_healthy"] else "cpu"
+    return info
+
+
+def _checkpoint(
+    *,
+    name: str,
+    path: Path | None,
+    expected_size: int,
+    expected_sha256: str,
+    code_prefix: str,
+    label: str,
+    problems: list[dict[str, str]],
+    extra: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Verifies one checkpoint by size and full SHA-256.
+
+    Problem codes are `<code_prefix>` plus missing, size_mismatch, hash_mismatch, or unreadable.
+    """
+    info: dict[str, Any] = {
+        "name": name,
+        **extra,
+        "path": None,
+        "present": False,
+        "size_bytes": None,
+        "expected_size_bytes": expected_size,
+        "expected_sha256": expected_sha256,
+        "sha256_checked": False,
+        "sha256": None,
+        "verified": False,
+    }
+    if path is None:
+        return info
+
+    info["path"] = str(path)
+
+    try:
+        size = path.stat().st_size if path.is_file() else None
+    except OSError as error:
+        problems.append(problem(f"{code_prefix}unreadable", f"The {label} cannot be read: {error}"))
+        return info
+
+    if size is None:
+        problems.append(
+            problem(f"{code_prefix}missing", f"The {label} is not installed. {SETUP_HINT}")
+        )
+        return info
+
+    info["present"] = True
+    info["size_bytes"] = size
+
+    if size != expected_size:
+        problems.append(
+            problem(
+                f"{code_prefix}size_mismatch",
+                f"The {label} has {size} bytes instead of {expected_size}; it is incomplete or "
+                f"corrupt. {SETUP_HINT}",
+            )
+        )
+        return info
+
+    try:
+        digest = model.sha256_file(path)
+    except OSError as error:
+        problems.append(problem(f"{code_prefix}unreadable", f"The {label} cannot be read: {error}"))
+        return info
+
+    info["sha256_checked"] = True
+    info["sha256"] = digest
+    if digest != expected_sha256:
+        problems.append(
+            problem(
+                f"{code_prefix}hash_mismatch",
+                f"The {label} has SHA-256 {digest} instead of {expected_sha256}; it is corrupt "
+                f"or not the pinned file. {SETUP_HINT}",
+            )
+        )
+        return info
+
+    info["verified"] = True
+    return info
+
+
+def _model(paths: DataPaths | None, problems: list[dict[str, str]]) -> dict[str, Any]:
+    return _checkpoint(
+        name=model.MODEL_NAME,
+        path=model.model_path(paths) if paths else None,
+        expected_size=model.MODEL_SIZE,
+        expected_sha256=model.MODEL_SHA256,
+        code_prefix="model_",
+        label=f"{model.MODEL_NAME} checkpoint",
+        problems=problems,
+        extra={"signature": model.MODEL_SIGNATURE},
+    )
+
+
+def _bpm_model(paths: DataPaths | None, problems: list[dict[str, str]]) -> dict[str, Any]:
+    return _checkpoint(
+        name=model.BEAT_MODEL_NAME,
+        path=model.beat_model_path(paths) if paths else None,
+        expected_size=model.BEAT_MODEL_SIZE,
+        expected_sha256=model.BEAT_MODEL_SHA256,
+        code_prefix="bpm_model_",
+        label=f"{model.BEAT_MODEL_NAME} {model.BEAT_MODEL_CHECKPOINT} checkpoint (BPM analysis)",
+        problems=problems,
+        extra={"checkpoint": model.BEAT_MODEL_CHECKPOINT},
+    )
+
+
+def _paths(paths: DataPaths | None) -> dict[str, str] | None:
+    if paths is None:
+        return None
     return {
-        "id": id_,
-        "title": title,
-        "status": status,
-        "detail": detail,
-        "action": action,
-        "data": data,
+        "home": str(paths.home),
+        "settings": str(paths.settings_file),
+        "cache": str(paths.cache),
+        "jobs": str(paths.jobs),
+        "logs": str(paths.logs),
+        "models": str(paths.models),
     }
 
 
-def _cpu_name() -> str:
+def check(environ: Mapping[str, str] | None = None, *, check_cuda: bool = True) -> dict[str, Any]:
+    started = time.monotonic()
+    problems: list[dict[str, str]] = []
+
+    paths: DataPaths | None
     try:
-        import winreg
+        paths = data_paths(environ)
+    except HomeUnavailableError as error:
+        paths = None
+        problems.append(problem("home_unavailable", str(error)))
 
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
-        ) as k:
-            return str(winreg.QueryValueEx(k, "ProcessorNameString")[0]).strip()
-    except OSError:
-        return platform.processor() or "unknown"
+    versions = _package_versions(problems)
+    _import_packages(versions, problems)
+    compute = _compute(check_cuda)
+    if not compute["cpu_available"] and "torch" in sys.modules:
+        problems.append(problem("cpu_unavailable", "PyTorch cannot run a CPU computation."))
+    model_info = _model(paths, problems)
+    bpm_model_info = _bpm_model(paths, problems)
 
-
-class Readiness:
-    def __init__(
-        self, data_root: Path | None, force_cpu: bool, full_verify: bool, probe_timeout: float
-    ) -> None:
-        self.data_root = data_root
-        self.force_cpu = force_cpu
-        self.full_verify = full_verify
-        self.probe_timeout = probe_timeout
-        self.checks: list[dict[str, Any]] = []
-        self.probe_timed_out = False
-        self.torch = None
-        self.compute: dict[str, Any] = {}
-
-    def run(self) -> dict[str, Any]:
-        self._python()
-        self._packages()
-        self._mp3()
-        dirs = self._data_dirs()
-        self._model(dirs)
-        self._cpu()
-        self._cuda()
-        test_mode = faults.test_mode_settings()
-        if test_mode:
-            self.checks.append(
-                _check(
-                    "worker-test-mode",
-                    "Worker test seams",
-                    "warning",
-                    "Test environment variables are set: " + ", ".join(sorted(test_mode)),
-                    "Unset the SNDS_WORKER_TEST_* variables; entries prepared now are unusable.",
-                    settings=test_mode,
-                )
-            )
-        return {
-            "separation_available": all(c["status"] != "missing" for c in self.checks),
-            "compute": self.compute,
-            "pipeline_id": TEST_PIPELINE_ID if faults.fake_separator_enabled() else PIPELINE_ID,
-            "model": describe(),
-            "data_root": str(dirs.root) if dirs else None,
-            "checks": self.checks,
-        }
-
-    def _python(self) -> None:
-        v = sys.version_info
-        ok = (v.major, v.minor) == (3, 12)
-        self.checks.append(
-            _check(
-                "worker-python",
-                "Worker Python",
-                "ok" if ok else "warning",
-                f"Python {platform.python_version()} ({sys.executable})",
-                "" if ok else f"The worker is pinned to Python 3.12; re-run {BOOTSTRAP}.",
-                version=platform.python_version(),
-                executable=sys.executable,
-            )
-        )
-
-    def _packages(self) -> None:
-        versions: dict[str, str | None] = {}
-        for name in PINNED:
-            try:
-                versions[name] = metadata.version(name)
-            except metadata.PackageNotFoundError:
-                versions[name] = None
-        missing = [n for n, v in versions.items() if v is None]
-        import_error = None
-        if not missing:
-            try:
-                import demucs.apply  # noqa: F401
-                import torch
-
-                self.torch = torch
-                versions["torch"] = torch.__version__
-            except Exception as exc:
-                import_error = f"{type(exc).__name__}: {exc}"
-        mismatched = [
-            n for n, v in versions.items() if v is not None and v.split("+")[0] != PINNED[n]
-        ]
-        build = None
-        if versions.get("torch"):
-            build = "cuda" if "+cu" in versions["torch"] else "cpu"
-        if missing or import_error:
-            status, action = "missing", f"Run {BOOTSTRAP} to install the worker environment."
-            detail = (
-                f"Missing: {', '.join(missing)}" if missing else f"Import failed: {import_error}"
-            )
-        elif mismatched:
-            status = "warning"
-            detail = "Versions differ from the lock: " + ", ".join(
-                f"{n} {versions[n]}" for n in mismatched
-            )
-            action = f"Run {BOOTSTRAP} to re-sync the locked environment."
-        else:
-            status, action = "ok", ""
-            detail = ", ".join(f"{n} {v}" for n, v in versions.items())
-        self.checks.append(
-            _check(
-                "worker-packages",
-                "Worker packages",
-                status,
-                detail,
-                action,
-                versions=versions,
-                torch_build=build,
-            )
-        )
-
-    def _mp3(self) -> None:
-        import soundfile as sf
-
-        has_mp3 = "MP3" in sf.available_formats()
-        self.checks.append(
-            _check(
-                "mp3-decoder",
-                "MP3 decoding",
-                "ok" if has_mp3 else "missing",
-                f"libsndfile {sf.__libsndfile_version__}"
-                + ("" if has_mp3 else " without MP3 support"),
-                "" if has_mp3 else f"Run {BOOTSTRAP} to reinstall soundfile.",
-                libsndfile=sf.__libsndfile_version__,
-            )
-        )
-
-    def _data_dirs(self) -> DataDirs | None:
-        try:
-            dirs = DataDirs.resolve(self.data_root)
-            dirs.ensure(dirs.cache, dirs.jobs, dirs.models)
-            probe = dirs.jobs / f".write-test-{os.getpid()}"
-            probe.write_bytes(b"ok")
-            probe.unlink()
-            same = dirs.same_volume(dirs.cache, dirs.jobs)
-            free = shutil.disk_usage(dirs.root).free
-        except Exception as exc:
-            self.checks.append(
-                _check(
-                    "data-directories",
-                    "SNDS data folders",
-                    "missing",
-                    f"The data folders are not writable: {exc}",
-                    "Check permissions or set SNDS_DATA_DIR to a writable absolute path.",
-                )
-            )
-            return None
-        status, action = "ok", ""
-        detail = f"{dirs.root} ({free / 2**30:.1f} GB free)"
-        if not same:
-            status = "missing"
-            action = "Keep cache and jobs on one volume (no junctions to other drives)."
-            detail += "; cache and jobs are on different volumes"
-        elif free < LOW_DISK_BYTES:
-            status = "warning"
-            action = "Free disk space: stems need about 85 MB per minute of 44.1 kHz audio."
-        self.checks.append(
-            _check(
-                "data-directories",
-                "SNDS data folders",
-                status,
-                detail,
-                action,
-                root=str(dirs.root),
-                free_bytes=free,
-                same_volume=same,
-            )
-        )
-        return dirs
-
-    def _model(self, dirs: DataDirs | None) -> None:
-        if dirs is None:
-            self.checks.append(
-                _check(
-                    "model-checkpoint",
-                    "Separation model",
-                    "missing",
-                    "Data folders unavailable.",
-                    "",
-                )
-            )
-            return
-        status = verify_checkpoint(dirs.models, use_memo=not self.full_verify)
-        action = ""
-        if status.ok:
-            state = "ok"
-            detail = f"{status.path} (SHA-256 verified via {status.verified_via})"
-        elif not status.present:
-            state = "missing"
-            detail = f"{checkpoint_path(dirs.models)} is not installed"
-            action = f"Run {BOOTSTRAP} (or: worker python -m snds_worker fetch-model)."
-        else:
-            state = "missing"
-            detail = f"{status.path} is invalid: {status.problem}"
-            action = f"Run {BOOTSTRAP} to download the pinned model again."
-        self.checks.append(
-            _check(
-                "model-checkpoint", "Separation model", state, detail, action, **status.to_json()
-            )
-        )
-
-    def _cpu(self) -> None:
-        threads = self.torch.get_num_threads() if self.torch is not None else None
-        logical = os.cpu_count()
-        slow = threads is not None and threads < 4
-        self.checks.append(
-            _check(
-                "cpu",
-                "CPU",
-                "warning" if slow else "ok",
-                f"{_cpu_name()}, {logical} logical processors, {threads} compute threads",
-                "CPU separation will be slow on fewer than 4 cores." if slow else "",
-                name=_cpu_name(),
-                logical_processors=logical,
-                compute_threads=threads,
-            )
-        )
-
-    def _cuda(self) -> None:
-        torch = self.torch
-        requested = "cpu" if self.force_cpu else "auto"
-        self.compute = {
-            "requested": requested,
-            "selected": "cpu",
-            "reason": None,
-            "device_name": None,
-        }
-        if torch is None:
-            self.compute["reason"] = "torch-unavailable"
-            self.checks.append(
-                _check("cuda", "CUDA acceleration", "warning", "PyTorch is not importable.", "")
-            )
-            return
-        available = bool(torch.cuda.is_available())
-        data: dict[str, Any] = {
-            "torch_cuda": torch.version.cuda,
-            "available": available,
-            "probe": None,
-        }
-        if available:
-            try:
-                props = torch.cuda.get_device_properties(0)
-                data.update(
-                    device_name=props.name,
-                    capability=f"{props.major}.{props.minor}",
-                    total_memory_gib=round(props.total_memory / 2**30, 2),
-                )
-            except Exception as exc:
-                data["properties_error"] = str(exc)
-        if self.force_cpu:
-            self.compute["reason"] = "forced-cpu"
-            detail = "Force CPU is on; the CUDA health check was skipped."
-            self.checks.append(_check("cuda", "CUDA acceleration", "ok", detail, "", **data))
-            return
-        if not available:
-            self.compute["reason"] = "cuda-not-available"
-            cpu_build = torch.version.cuda is None
-            detail = (
-                "CPU build of PyTorch; separation runs on the CPU."
-                if cpu_build
-                else "No usable CUDA device; separation runs on the CPU."
-            )
-            action = (
-                ""
-                if cpu_build
-                else "Install/update the NVIDIA driver (R570+) for a supported GPU "
-                "(GTX 16 / RTX 20 or newer)."
-            )
-            self.checks.append(
-                _check(
-                    "cuda",
-                    "CUDA acceleration",
-                    "ok" if cpu_build else "warning",
-                    detail,
-                    action,
-                    **data,
-                )
-            )
-            return
-        error, timed_out = probe_cuda_bounded(CUDA_DEVICE, self.probe_timeout)
-        self.probe_timed_out = timed_out
-        data["probe"] = "failed" if error else "passed"
-        if error:
-            self.compute["reason"] = "cuda-probe-failed"
-            data["probe_error"] = error
-            self.checks.append(
-                _check(
-                    "cuda",
-                    "CUDA acceleration",
-                    "warning",
-                    f"CUDA health check failed: {error}. Separation will use the CPU.",
-                    "Update the NVIDIA driver (R570+) or enable Force CPU.",
-                    **data,
-                )
-            )
-            return
-        self.compute.update(selected=CUDA_DEVICE, device_name=data.get("device_name"))
-        self.checks.append(
-            _check(
-                "cuda",
-                "CUDA acceleration",
-                "ok",
-                f"{data.get('device_name')} (CUDA {torch.version.cuda}) passed the health check",
-                "",
-                **data,
-            )
-        )
+    return message(
+        "readiness",
+        ready=not problems,
+        worker={
+            "version": __version__,
+            "python": platform.python_version(),
+            "executable": sys.executable,
+        },
+        packages=versions,
+        compute=compute,
+        model=model_info,
+        bpm_model=bpm_model_info,
+        paths=_paths(paths),
+        problems=problems,
+        elapsed_ms=round((time.monotonic() - started) * 1000),
+    )
