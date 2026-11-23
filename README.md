@@ -20,7 +20,7 @@ Run these in Windows PowerShell 5.1. Clone into an ordinary folder (not under `%
 ```powershell
 git clone <repository URL> snds
 cd snds
-.\scripts\bootstrap.ps1                 # worker environment (CUDA if an NVIDIA driver is found) + models, about 1.5 minutes
+.\scripts\bootstrap.ps1                 # worker environment (checks GPU and driver compatibility) + models, about 1.5 minutes
 .\scripts\build.ps1 -Config Release     # configures build\ on first use, about 3 minutes
 .\scripts\run.ps1 -Config Release       # launch the app (the script waits until you close the window)
 ```

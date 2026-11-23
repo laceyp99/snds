@@ -49,7 +49,11 @@ cd snds
 .\scripts\bootstrap.ps1
 ```
 
-`bootstrap.ps1` picks the PyTorch build for you: **CUDA** if `nvidia-smi` works, otherwise **CPU**.
+`bootstrap.ps1` defaults to `-Compute auto`. It selects **CUDA** when `nvidia-smi` reports
+Windows driver 527.41 or newer and compute capability 5.x through 9.x for every NVIDIA adapter.
+These architectures match the pinned PyTorch 2.1.2 CUDA 12.1 wheel. A failed query, an unknown
+architecture, or a mixed supported/unsupported configuration selects **CPU**. Use
+`-Compute cuda` to override detection when you have selected a compatible GPU yourself.
 It then syncs `worker\.venv` from the committed `worker\uv.lock` with a uv-managed Python 3.11,
 downloads both checkpoints into the data folder (checking their SHA-256), and runs a worker
 readiness check. It is safe to re-run; a verified checkpoint is not downloaded again.

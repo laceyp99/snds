@@ -6,7 +6,7 @@
     the pinned htdemucs and beat_this (BPM) checkpoints into the SNDS data directory (SNDS_HOME, default
     %LOCALAPPDATA%\snds). Safe to re-run: a verified checkpoint is not downloaded again.
 .PARAMETER Compute
-    PyTorch build to install: auto (cuda if nvidia-smi works, else cpu), cpu, or cuda.
+    PyTorch build to install: auto (checks NVIDIA driver and GPU compatibility), cpu, or cuda.
 .PARAMETER SkipModel
     Set up the environment only; do not download the checkpoint.
 #>
@@ -22,12 +22,12 @@ trap { Write-Host "bootstrap failed: $($_.Exception.Message)" -ForegroundColor R
 $uv = Get-RequiredCommand 'uv' 'Install uv from https://docs.astral.sh/uv/getting-started/installation/ and open a new terminal.'
 
 if ($Compute -eq 'auto') {
-    if (Test-NvidiaGpu) {
+    if (Test-CompatibleNvidiaGpu) {
         $Compute = 'cuda'
-        Write-Step 'NVIDIA driver detected: installing the CUDA build of PyTorch'
+        Write-Step 'Compatible NVIDIA hardware detected: installing the CUDA build of PyTorch'
     } else {
         $Compute = 'cpu'
-        Write-Step 'No NVIDIA driver detected: installing the CPU build of PyTorch'
+        Write-Step 'CUDA compatibility could not be confirmed for every detected GPU: installing the CPU build of PyTorch'
     }
 }
 
