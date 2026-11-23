@@ -91,7 +91,7 @@ def classify_error(error: BaseException, device: str) -> JobFailure:
             suggested_action="retry_cpu" if on_cuda else None,
         )
 
-    backend_errors = ("cuda error:", "cudnn error:", "cublas error:", "nvrtc: error:")
+    backend_errors = ("cuda error:", "cuda driver error:", "cuda nvrtc error:", "cudnn error:")
     if on_cuda and isinstance(error, RuntimeError) and lowered.startswith(backend_errors):
         return JobFailure(
             "cuda_failed",

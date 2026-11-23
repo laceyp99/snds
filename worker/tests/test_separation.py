@@ -93,6 +93,20 @@ def test_auto_is_cpu_without_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
             "retry_cpu",
         ),
         (
+            RuntimeError("CUDA driver error: unknown error"),
+            "cuda",
+            "cuda_failed",
+            True,
+            "retry_cpu",
+        ),
+        (
+            RuntimeError("CUDA NVRTC error: NVRTC_ERROR_BUILTIN_OPERATION_FAILURE"),
+            "cuda",
+            "cuda_failed",
+            True,
+            "retry_cpu",
+        ),
+        (
             RuntimeError("cuDNN error: CUDNN_STATUS_EXECUTION_FAILED"),
             "cuda",
             "cuda_failed",
