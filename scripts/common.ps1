@@ -103,15 +103,27 @@ function Get-SndsHome {
     return Join-Path $env:LOCALAPPDATA 'snds'
 }
 
-function Test-NvidiaGpu {
-    # True if nvidia-smi exists and can talk to a driver.
+function Test-CompatibleNvidiaGpu {
+    if ($env:CUDA_VISIBLE_DEVICES -eq '-1') { return $false }
     $smi = Get-Command nvidia-smi -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $smi) {
         return $false
     }
     $ErrorActionPreference = 'Continue'
-    & $smi.Source -L *> $null
-    return ($LASTEXITCODE -eq 0)
+    $rows = @(& $smi.Source '--query-gpu=driver_version,compute_cap' '--format=csv,noheader,nounits' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $rows.Count -eq 0) { return $false }
+
+    # The pinned Windows cu121 wheel has sm_50, 60, 61, 70, 75, 80, 86 and 90.
+    # Each major has a .0 binary, compatible with later minors of the same major.
+    # CUDA and nvidia-smi can enumerate adapters in different orders.
+    foreach ($row in $rows) {
+        if ($row -notmatch '^\s*(\d+\.\d+)\s*,\s*[5-9]\.\d+\s*$') { return $false }
+        $driver = $null
+        if (-not [version]::TryParse($Matches[1], [ref]$driver) -or $driver -lt [version]'527.41') {
+            return $false
+        }
+    }
+    return $true
 }
 
 function Invoke-WorkerJson {
