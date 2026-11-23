@@ -91,7 +91,8 @@ def classify_error(error: BaseException, device: str) -> JobFailure:
             suggested_action="retry_cpu" if on_cuda else None,
         )
 
-    if on_cuda and any(token in lowered for token in ("cuda", "cudnn", "cublas", "nvrtc")):
+    backend_errors = ("cuda error:", "cudnn error:", "cublas error:", "nvrtc: error:")
+    if on_cuda and isinstance(error, RuntimeError) and lowered.startswith(backend_errors):
         return JobFailure(
             "cuda_failed",
             "The GPU failed during separation. Try again on the CPU.",
