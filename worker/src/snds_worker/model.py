@@ -55,7 +55,7 @@ class FetchResult:
 
 
 def model_dir(paths: DataPaths) -> Path:
-    """Folder passed to Demucs as its local model repository."""
+    """Folder containing the pinned separation checkpoint."""
     return paths.models / MODEL_NAME
 
 
