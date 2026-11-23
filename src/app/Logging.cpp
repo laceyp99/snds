@@ -228,8 +228,8 @@ void RotatingFileLogger::write (Level level, const juce::String& message)
     if (stream == nullptr)
         open();
 
-    if (stream != nullptr && bytesWritten > 0 && bytesWritten + size > maxBytes)
-        rotate();
+    if (stream != nullptr && bytesWritten > 0 && bytesWritten + size > maxBytes && ! rotate())
+        return;
 
     if (stream != nullptr && stream->write (line.toRawUTF8(), static_cast<size_t> (size)))
         bytesWritten += size;
@@ -253,34 +253,33 @@ void RotatingFileLogger::open()
     }
 }
 
-void RotatingFileLogger::rotate()
+bool RotatingFileLogger::rotate()
 {
     stream.reset();
 
+    const auto pending = file.getSiblingFile (file.getFileName() + ".rotating");
     const auto backup = [this] (int index)
     { return file.getSiblingFile (file.getFileName() + "." + juce::String (index)); };
-    auto rotated = false;
+    const auto archivePending = [&]
+    {
+        // A gap can also be the point where an earlier archive shift stopped.
+        int slot = 1;
+        while (slot < backupCount && backup (slot).exists())
+            ++slot;
+        for (; slot > 1; --slot)
+            if (! backup (slot - 1).replaceFileIn (backup (slot)))
+                return false;
+        return pending.replaceFileIn (backup (1));
+    };
 
+    // Secure the active log before touching its history. Finish any interrupted shift first.
+    bool rotated = false;
     if (backupCount == 0)
-    {
         rotated = file.deleteFile();
-    }
-    else
-    {
-        backup (backupCount).deleteFile();
-
-        for (auto index = backupCount - 1; index >= 1; --index)
-            if (backup (index).existsAsFile())
-                backup (index).moveFileTo (backup (index + 1));
-
-        rotated = file.moveFileTo (backup (1));
-    }
-
+    else if (! pending.exists() || archivePending())
+        rotated = file.moveFileTo (pending) && archivePending();
     open();
-
-    // If another process holds the file, keep appending and retry after another maxBytes.
-    if (! rotated)
-        bytesWritten = 0;
+    return rotated;
 }
 
 //==============================================================================

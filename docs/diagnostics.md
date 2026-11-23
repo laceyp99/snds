@@ -87,6 +87,11 @@ song title in a bug report is usually not needed; replace it if the file name is
 ## Logs on disk
 
 The logs are in `%LOCALAPPDATA%\snds\logs` (or `SNDS_HOME\logs`): `app.log` for the app and
-`worker.log` for the worker.
+`worker.log` for the worker. A viewer can block rotation by holding the active log or a
+numbered archive open. When the active log fills up, a live tail can go quiet. Entries skipped
+during a failed rotation are lost from the file. Close the viewer so rotation can resume.
+If you see `app.log.rotating` or `worker.log.rotating`, it contains the previous active log
+waiting to enter the numbered archives.
+
 Failures also offer **Open logs folder**. A job also writes the worker's error output to
 `worker-stderr.log` in its folder under `jobs\`.

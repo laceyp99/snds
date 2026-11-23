@@ -229,25 +229,53 @@ public:
             first.write (RotatingFileLogger::Level::info, "kept");
         }
 
-        beginTest ("If rotation is blocked, logging continues in the current file");
+        beginTest ("A reader holding the full log preserves history until rotation resumes");
         {
             const test::ScopedTempDirectory temp;
             const auto file = temp.child ("app.log");
-            file.create();
+            const auto newest = temp.child ("app.log.1");
+            const auto oldest = temp.child ("app.log.2");
+            const auto full = juce::String::repeatedString ("a", 500);
+            expect (file.replaceWithText (full));
+            expect (newest.replaceWithText ("newest archive"));
+            expect (oldest.replaceWithText ("oldest archive"));
 
+            RotatingFileLogger logger (file, testRedactor, 500, 2);
             {
                 // The C runtime shares read and write access but not delete, so the rename fails.
                 std::ifstream reader (std::filesystem::path (file.getFullPathName().toWideCharPointer()));
                 expect (reader.is_open());
 
-                RotatingFileLogger logger (file, testRedactor, 500, 2);
-
                 for (int i = 0; i < 50; ++i)
                     logger.write (RotatingFileLogger::Level::info, "blocked " + juce::String (i));
+                expectEquals (file.loadFileAsString(), full);
+                expectEquals (newest.loadFileAsString(), juce::String ("newest archive"));
+                expectEquals (oldest.loadFileAsString(), juce::String ("oldest archive"));
             }
 
-            expectEquals (readLines (file).size(), 50);
-            expect (! temp.child ("app.log.1").exists());
+            logger.write (RotatingFileLogger::Level::info, "resumed");
+            expect (readLines (file).strings.getLast().endsWith ("resumed"));
+            expectEquals (newest.loadFileAsString(), full);
+            expectEquals (oldest.loadFileAsString(), juce::String ("newest archive"));
+        }
+
+        beginTest ("An interrupted archive shift resumes from its empty slot");
+        {
+            const test::ScopedTempDirectory temp;
+            const auto file = temp.child ("app.log");
+            const auto full = juce::String::repeatedString ("a", 500);
+            expect (file.replaceWithText (full));
+            expect (temp.child ("app.log.rotating").replaceWithText ("previous active"));
+            expect (temp.child ("app.log.1").replaceWithText ("previous archive"));
+            expect (temp.child ("app.log.3").replaceWithText ("oldest"));
+
+            RotatingFileLogger logger (file, testRedactor, 500, 3);
+            logger.write (RotatingFileLogger::Level::info, "after restart");
+            expect (readLines (file).strings.getLast().endsWith ("after restart"));
+            expectEquals (temp.child ("app.log.1").loadFileAsString(), full);
+            expectEquals (temp.child ("app.log.2").loadFileAsString(), juce::String ("previous active"));
+            expectEquals (temp.child ("app.log.3").loadFileAsString(), juce::String ("previous archive"));
+            expect (! temp.child ("app.log.rotating").exists());
         }
     }
 };

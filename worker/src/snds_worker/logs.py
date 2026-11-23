@@ -49,6 +49,41 @@ class RedactingFormatter(logging.Formatter):
         return redact(super().format(record))
 
 
+class _WindowsSafeRotatingFileHandler(RotatingFileHandler):
+    """Move the active file first so Windows locks cannot shift existing backups."""
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        # Another viewer can deny a rename. The separate stderr handler already emitted
+        # the redacted record; logging's default diagnostic would also print its raw args.
+        if not isinstance(sys.exc_info()[1], OSError):
+            super().handleError(record)
+
+    def doRollover(self) -> None:
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+
+        base = Path(self.baseFilename)
+        rotating = Path(f"{base}.rotating")
+
+        def backup(index: int) -> Path:
+            return Path(f"{base}.{index}")
+
+        def archive_pending() -> None:
+            slot = 1
+            while slot < self.backupCount and backup(slot).exists():
+                slot += 1
+            for index in range(slot, 1, -1):
+                os.replace(backup(index - 1), backup(index))
+            os.replace(rotating, backup(1))
+
+        if rotating.exists():
+            archive_pending()
+        base.rename(rotating)
+        archive_pending()
+        # FileHandler.emit opens a new stream on the next successful write.
+
+
 def configure_logging(log_dir: Path | None = None, *, max_bytes: int = MAX_BYTES) -> None:
     """Sends log records to stderr, and to <log_dir>/worker.log when log_dir is given.
 
@@ -69,7 +104,7 @@ def configure_logging(log_dir: Path | None = None, *, max_bytes: int = MAX_BYTES
 
     if log_dir is not None:
         log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = RotatingFileHandler(
+        file_handler = _WindowsSafeRotatingFileHandler(
             log_dir / LOG_FILE_NAME,
             maxBytes=max_bytes,
             backupCount=BACKUP_COUNT,

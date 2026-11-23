@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,51 @@ def test_file_log_is_redacted_and_rotates(tmp_path: Path, monkeypatch: pytest.Mo
     rotated = sorted(log_dir.glob(f"{LOG_FILE_NAME}.*"))
     assert len(rotated) == BACKUP_COUNT
     assert all(path.stat().st_size <= 2000 for path in rotated)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows read handles deny log rename")
+def test_locked_active_log_skips_record_without_shifting_archives(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / LOG_FILE_NAME).write_text("active", encoding="utf-8")
+    (log_dir / f"{LOG_FILE_NAME}.1").write_text("archive one", encoding="utf-8")
+    (log_dir / f"{LOG_FILE_NAME}.2").write_text("archive two", encoding="utf-8")
+    configure_logging(log_dir, max_bytes=1)
+
+    log = logging.getLogger("snds_worker.locked")
+    with (log_dir / LOG_FILE_NAME).open("rb"):
+        log.info("skipped while locked")
+
+    assert (log_dir / LOG_FILE_NAME).read_text(encoding="utf-8") == "active"
+    assert (log_dir / f"{LOG_FILE_NAME}.1").read_text(encoding="utf-8") == "archive one"
+    assert (log_dir / f"{LOG_FILE_NAME}.2").read_text(encoding="utf-8") == "archive two"
+
+    log.info("written after unlock")
+
+    contents = "\n".join(
+        path.read_text(encoding="utf-8") for path in log_dir.glob(f"{LOG_FILE_NAME}*")
+    )
+    assert "skipped while locked" not in contents
+    assert "active" in contents
+    assert "archive one" in contents
+    assert "archive two" in contents
+    assert "written after unlock" in contents
+
+
+def test_interrupted_rotation_is_archived_before_active_log(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / LOG_FILE_NAME).write_text("active", encoding="utf-8")
+    (log_dir / f"{LOG_FILE_NAME}.rotating").write_text("pending", encoding="utf-8")
+    (log_dir / f"{LOG_FILE_NAME}.1").write_text("archive one", encoding="utf-8")
+    configure_logging(log_dir, max_bytes=1)
+
+    logging.getLogger("snds_worker.recovery").info("new record")
+
+    assert (log_dir / f"{LOG_FILE_NAME}.1").read_text(encoding="utf-8") == "active"
+    assert (log_dir / f"{LOG_FILE_NAME}.2").read_text(encoding="utf-8") == "pending"
+    assert (log_dir / f"{LOG_FILE_NAME}.3").read_text(encoding="utf-8") == "archive one"
+    assert "new record" in (log_dir / LOG_FILE_NAME).read_text(encoding="utf-8")
 
 
 def test_stderr_only_logging_writes_no_files(
