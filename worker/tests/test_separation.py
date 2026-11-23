@@ -93,6 +93,20 @@ def test_auto_is_cpu_without_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
             "retry_cpu",
         ),
         (
+            RuntimeError("CUDA driver error: unknown error"),
+            "cuda",
+            "cuda_failed",
+            True,
+            "retry_cpu",
+        ),
+        (
+            RuntimeError("CUDA NVRTC error: NVRTC_ERROR_BUILTIN_OPERATION_FAILURE"),
+            "cuda",
+            "cuda_failed",
+            True,
+            "retry_cpu",
+        ),
+        (
             RuntimeError("cuDNN error: CUDNN_STATUS_EXECUTION_FAILED"),
             "cuda",
             "cuda_failed",
@@ -108,6 +122,13 @@ def test_auto_is_cpu_without_cuda(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
         (OSError(errno.ENOSPC, "No space left"), "cpu", "disk_full", True, "free_disk_space"),
         (ValueError("bad shape"), "cuda", "separation_failed", False, None),
+        (
+            RuntimeError("Expected all tensors to be on the same device, found cuda:0 and cpu!"),
+            "cuda",
+            "separation_failed",
+            False,
+            None,
+        ),
     ],
 )
 def test_classify_error(error, device, code, retryable, action) -> None:

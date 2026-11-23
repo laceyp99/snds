@@ -151,7 +151,7 @@ whether repeating the same request could succeed; `suggestedAction` is a hint, o
 | `source_unsupported` | Format or channel layout outside the supported set | no |
 | `decode_failed` | Corrupt or inconsistent audio | no |
 | `model_missing` | Checkpoint absent or fails verification (checked at job start) | `fetch_model` |
-| `cuda_failed` | CUDA error at runtime | yes, `retry_cpu` |
+| `cuda_failed` | Recognized CUDA backend failure during a GPU job | yes, `retry_cpu` |
 | `out_of_memory` | GPU or system memory exhausted | yes, `retry_cpu` when on CUDA |
 | `separation_failed` | Other separator error | no |
 | `normalization_failed` | Alignment or resampling error | no |
@@ -225,9 +225,9 @@ Implementation: `worker/src/snds_worker/{prepare,pipeline,decode,separation,norm
   `apply_model` segment by segment. `progress` is the share of segments done; `etaSeconds`
   appears once at least 5% and 5 s have elapsed. Cancellation is polled between segments, so on
   a slow CPU it can take up to one segment (a few seconds) to take effect. CUDA out-of-memory is
-  `out_of_memory` and any other CUDA runtime error is `cuda_failed`, both `retryable: true,
-  suggestedAction: "retry_cpu"`; on the CPU, memory exhaustion is `out_of_memory` with
-  `retryable: false`.
+  `out_of_memory`. Recognized CUDA backend failures, including driver, NVRTC and cuDNN
+  errors, are `cuda_failed`. Both outcomes suggest `retry_cpu`. A tensor device mismatch
+  is `separation_failed` with `retryable: false`. CPU memory exhaustion is also non-retryable.
 - **`normalizing`.** Resamples each stem back to the source rate with exactly the source frame
   count and writes it as stereo float32 WAV to `jobDir\package\<stem>.wav`. No gain,
   normalization, or clipping; peaks above 1.0 are preserved. Differences of more than 2 frames
