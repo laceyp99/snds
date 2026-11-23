@@ -87,6 +87,8 @@ song title in a bug report is usually not needed; replace it if the file name is
 ## Logs on disk
 
 The logs are in `%LOCALAPPDATA%\snds\logs` (or `SNDS_HOME\logs`): `app.log` for the app and
-`worker.log` for the worker.
+`worker.log` for the worker. If a log viewer holds the active file open when it reaches the
+rotation limit, new entries can be missing from that file. Close the viewer to let rotation
+resume on the next write. Existing entries and numbered archives survive the lock.
 Failures also offer **Open logs folder**. A job also writes the worker's error output to
 `worker-stderr.log` in its folder under `jobs\`.

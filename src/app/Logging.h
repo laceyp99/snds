@@ -40,7 +40,8 @@ private:
     Writes <file> and rotates it to <file>.1 ... <file>.<backupCount> before a line would take
     it past maxBytes. Every line is redacted, and each one reaches the OS as a single write, so
     a crash loses nothing already logged. It takes a lock and does file I/O: never call it from
-    the audio callback.
+    the audio callback. If the full log is held open and cannot rotate, new entries are
+    dropped until rotation succeeds.
 */
 class RotatingFileLogger final : public juce::Logger
 {
@@ -73,7 +74,7 @@ public:
 
 private:
     void open();
-    void rotate();
+    bool rotate();
 
     const juce::File file;
     const PathRedactor redactor;
