@@ -7,6 +7,8 @@ tests use a fake (`snds_worker.fake_separator`) so they need neither the model n
 from __future__ import annotations
 
 import errno
+import hashlib
+import io
 import logging
 import random
 import time
@@ -146,10 +148,15 @@ class DemucsSeparator:
     """
 
     def __init__(self, device: str, model_dir: Path) -> None:
-        from demucs.pretrained import get_model
+        from demucs.states import load_model
 
         checkpoint = model_dir / model.MODEL_FILENAME
-        if not model.file_matches(checkpoint, model.MODEL_SHA256, model.MODEL_SIZE):
+        try:
+            with checkpoint.open("rb") as file:
+                data = file.read(model.MODEL_SIZE + 1)
+        except FileNotFoundError:
+            data = b""
+        if len(data) != model.MODEL_SIZE or hashlib.sha256(data).hexdigest() != model.MODEL_SHA256:
             raise JobFailure(
                 "model_missing",
                 f"The {model.MODEL_NAME} checkpoint is missing or damaged. Run "
@@ -162,7 +169,12 @@ class DemucsSeparator:
 
         started = time.perf_counter()
         self._device = torch.device(device)
-        self._model = get_model(model.MODEL_SIGNATURE, repo=model_dir)
+        # The pinned package includes the Demucs class. Deserialize only the bytes just verified.
+        with io.BytesIO(data) as verified:
+            del data
+            package = torch.load(verified, map_location="cpu", weights_only=False)
+        self._model = load_model(package)
+        del package
         if tuple(self._model.sources) != STEMS:
             raise JobFailure(
                 "separation_failed",

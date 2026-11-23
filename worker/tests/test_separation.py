@@ -178,8 +178,12 @@ def test_demucs_separator_reports_a_missing_checkpoint(tmp_path: Path) -> None:
     assert error.value.suggested_action == "fetch_model"
 
 
-def test_demucs_separator_rejects_a_corrupt_checkpoint(tmp_path: Path) -> None:
-    (tmp_path / model.MODEL_FILENAME).write_bytes(b"truncated")
+@pytest.mark.parametrize("contents", [b"short", b"wrong digest"])
+def test_demucs_separator_rejects_a_corrupt_checkpoint(
+    tmp_path: Path, monkeypatch, contents
+) -> None:
+    monkeypatch.setattr(model, "MODEL_SIZE", len(b"wrong digest"))
+    (tmp_path / model.MODEL_FILENAME).write_bytes(contents)
 
     with pytest.raises(JobFailure) as error:
         separation.DemucsSeparator("cpu", tmp_path)
