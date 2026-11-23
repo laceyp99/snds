@@ -27,7 +27,7 @@ if ($Compute -eq 'auto') {
         Write-Step 'Compatible NVIDIA hardware detected: installing the CUDA build of PyTorch'
     } else {
         $Compute = 'cpu'
-        Write-Step 'CUDA compatibility could not be confirmed for every detected GPU: installing the CPU build of PyTorch'
+        Write-Step 'Auto selected the CPU build of PyTorch. To install the CUDA build on compatible hardware, run bootstrap.ps1 -Compute cuda.'
     }
 }
 
