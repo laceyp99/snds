@@ -58,8 +58,8 @@ readiness check and quits, without a dialog.
 ## What is redacted, and what is not
 
 **Redacted.** Every line and every log passes through the same rule: your user profile folder
-reads `%USERPROFILE%` and your local app data folder reads `%LOCALAPPDATA%`. The computer name and
-user name are never collected.
+reads `%USERPROFILE%` and your local app data folder reads `%LOCALAPPDATA%`. The report has no
+separate fields for your computer name or Windows account name.
 
 **Not collected.** Song audio, stems, artwork, and cache files. Settings come from known fields
 only, so an unknown field is never copied (the script lists other keys by name, without values).
@@ -67,9 +67,10 @@ The cache section holds only keys, sizes, status and file names.
 
 **Still present, so look before you send.**
 
-- The list of recent songs has each song's **title and the path of the original file**. Only the
-  profile and local app data prefixes are replaced, so a path such as `D:\Music\Artist\Song.wav`
-  stays as it is.
+- Check **SNDS home**, the app and worker locations, and tool paths such as Python and CMake.
+  If your data folder is `D:\Pat\snds`, that path still shows the name Pat.
+- The list of recent songs includes each song's **title and original file path**. An external
+  path such as `D:\Music\Pat\Song.wav` also stays visible.
 - Logs name the files SNDS worked on, and error messages can quote them.
 - The report names your GPU, driver, CPU and installed tools.
 
