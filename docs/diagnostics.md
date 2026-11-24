@@ -67,9 +67,10 @@ The cache section holds only keys, sizes, status and file names.
 
 **Still present, so look before you send.**
 
-- The list of recent songs has each song's **title and the path of the original file**. Only the
-  profile and local app data prefixes are replaced. If your Windows account is named Pat,
-  a path such as `D:\Music\Pat\Song.wav` still shows your account name.
+- Check **SNDS home**, the app and worker locations, and tool paths such as Python and CMake.
+  If your data folder is `D:\Pat\snds`, that path still shows the name Pat.
+- The list of recent songs includes each song's **title and original file path**. An external
+  path such as `D:\Music\Pat\Song.wav` also stays visible.
 - Logs name the files SNDS worked on, and error messages can quote them.
 - The report names your GPU, driver, CPU and installed tools.
 
