@@ -189,15 +189,18 @@ def test_module_entry_point(snds_home: Path) -> None:
     completed = subprocess.run(
         [sys.executable, "-I", "-m", "snds_worker", "readiness"],
         capture_output=True,
-        text=True,
         timeout=300,
         check=False,
     )
 
-    report = single_json_line(completed.stdout)
-    assert completed.returncode == cli.EXIT_FAILED, completed.stderr
+    # Bytes, not text=True, which would hide a "\r\n" line ending.
+    stderr = completed.stderr.decode("utf-8", "replace")
+    assert completed.stdout.endswith(b"\n"), completed.stdout
+    assert b"\r" not in completed.stdout
+    report = single_json_line(completed.stdout.decode("ascii"))
+    assert completed.returncode == cli.EXIT_FAILED, stderr
     assert report["problems"][0]["code"] == "model_missing"
-    assert "Traceback" not in completed.stderr
+    assert "Traceback" not in stderr
 
 
 def test_runs_without_stdin_or_stderr(snds_home: Path) -> None:
