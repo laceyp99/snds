@@ -1,4 +1,4 @@
-// Phase 4 validation through the real engine and the real UI controls: a parameter storm while
+// Mix validation through the real engine and the real UI controls: a parameter storm while
 // playing and seeking, the solo/mute truth table driven from the stem cards, and (opt-in) images of
 // the stem cards. The DSP classes have their own tests (Dsp*Tests); this file proves the pieces
 // work together the way the app uses them.

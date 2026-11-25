@@ -37,7 +37,7 @@ public:
                           int numFrames) noexcept = 0;
 };
 
-/** The Phase 3 mix: every stem at unity gain, summed in stem order. */
+/** Default mix stage until the interactive mix is installed: every stem at unity gain, summed in stem order. */
 class UnityStemMixStage final : public StemMixStage
 {
 public:

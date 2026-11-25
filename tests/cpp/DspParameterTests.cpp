@@ -68,7 +68,7 @@ private:
 
     void testRangesAndDefaults()
     {
-        beginTest ("Ranges and defaults follow the plan");
+        beginTest ("Ranges and defaults");
 
         for (int s = 0; s < numStems; ++s)
         {

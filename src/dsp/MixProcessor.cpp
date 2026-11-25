@@ -135,7 +135,7 @@ void MixProcessor::processChunk (const std::array<const float* const*, numStems>
     if (parameters.read (snapshot) == ParameterStore::ReadResult::updated)
         applyParameters();
 
-    // 1. Filters, then fader/mute/solo/pan, into the per-stem buffers (which are the Phase 5 tap).
+    // 1. Filters, then fader/mute/solo/pan, into the per-stem buffers (which are the post-fader tap the visuals read).
     for (std::size_t i = 0; i < stems.size(); ++i)
     {
         const std::array<const float*, 2> in { stems[i][0] + offset, stems[i][1] + offset };

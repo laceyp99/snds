@@ -1,4 +1,4 @@
-// Phase 5 validation: what the picture does when the mix changes (through the real MixProcessor and
+// Visual validation: what the picture does when the mix changes (through the real MixProcessor and
 // mappings), what happens to playback when the renderer fails or is busy, and that fullscreen can
 // always be left. The GPU scenarios need a GPU and a small window of their own, so they only run
 // when SNDS_RENDER_GL_TESTS=1 (and SNDS_RENDER_FULLSCREEN_TESTS=1 for real fullscreen windows).
