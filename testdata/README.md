@@ -61,4 +61,4 @@ against libsndfile's count (22050): MP3 encoder delay and padding decide A/B ali
 Observed (JUCE 8.0.15, libsndfile 1.2.0): JUCE decodes this MP3 to 24192 frames (21 MPEG frames,
 no LAME gapless trim); libsndfile reports 22050. The 2142-frame difference is encoder delay plus
 padding. The worker's stems are aligned to the libsndfile count, so JUCE-decoded playback of the
-original must trim the same delay (Phase 3+).
+original must trim the same delay.

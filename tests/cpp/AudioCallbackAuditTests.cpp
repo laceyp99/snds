@@ -553,7 +553,7 @@ private:
 
     void testMixProcessor()
     {
-        beginTest ("AuditCallback: the Phase 4 MixProcessor in the stem mix seam, with live parameter changes");
+        beginTest ("AuditCallback: the MixProcessor in the stem mix seam, with live parameter changes");
         MixService service; // the production adapter around MixProcessor
         auto& parameters = service.parameters();
         Harness harness (44100, 44100 * 3);

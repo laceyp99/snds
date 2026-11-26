@@ -17,7 +17,7 @@ are in `docs/protocol.md`.
   stdout reader, one stderr reader. Events reach the owner through a dispatcher (the message
   thread by default), in order, and never after the owner is destroyed. The destructor terminates
   the process tree and joins, which takes milliseconds.
-- The audio thread (Phase 3+) never touches files, logging, the worker, or the cache.
+- The audio thread never touches files, logging, the worker, or the cache.
 
 ## Worker process model (`src/app/WorkerProcess.*`)
 
@@ -46,7 +46,7 @@ Tests run real processes: the test executable copied as `python.exe` plays a scr
 says why). The app treats that as "not detected" and uses `SongMetadata::defaultBpm` (120) as a
 flagged default until the user sets a tempo.
 
-## Fingerprint, cache, and import (Phase 2)
+## Fingerprint, cache, and import
 
 - `validateSourceFile` (`model/SongImport`) checks WAV (PCM 16/24/32, float32) and MP3, mono or
   stereo, 8 to 192 kHz, at most 30 minutes. `extractEmbeddedArtwork` / `makeFallbackArtwork`
@@ -102,7 +102,7 @@ Tests: `SongSessionTests` drive the whole flow against the scripted fake worker;
 --e2e` (`EndToEndTests.cpp`, opt-in) runs the same session against the real worker in a scratch
 `SNDS_HOME` (`SNDS_E2E_HOME`, `SNDS_E2E_TRACK`).
 
-## Playback in the app (Phase 3)
+## Playback in the app
 
 `AudioService` (owned by the application object, created before the window, started after it
 unless `--smoke-exit*` or `--no-audio`) holds the `PlaybackEngine`, the JUCE `AudioDeviceManager`
@@ -126,7 +126,7 @@ and the `AudioDeviceController`. `MainComponent` receives a pointer and builds a
 - **Audio settings**: the header button opens `AudioSettingsComponent` (JUCE's selector, output
   only). It is closed, and the engine unloaded, before `AudioService` is destroyed.
 
-## Audio threading contract (Phase 3)
+## Audio threading contract
 
 **Who runs what**
 
@@ -147,7 +147,7 @@ block is silence and the callback moves on.
 
 | From -> to | Mechanism |
 |---|---|
-| message -> audio | atomics: `playing`, `looping`, `originalWanted`, `pendingSeek`; the shared `SeekTarget` (one word: 24-bit generation + 40-bit frame, CAS-published); the Phase 4 `ParameterStore` snapshot (seqlock read) |
+| message -> audio | atomics: `playing`, `looping`, `originalWanted`, `pendingSeek`; the shared `SeekTarget` (one word: 24-bit generation + 40-bit frame, CAS-published); the mix `ParameterStore` snapshot (seqlock read) |
 | prefetch -> audio | one SPSC ring per stream; `published`/`consumed` counters carry the seek generation, a seqlock-style re-check after each copy rejects frames a flush may have overwritten; no locks |
 | audio -> message/UI/visuals | atomics only: position, `buffering`, `audible`, `reachedEnd`, underrun count, `MeterStore` |
 | message <-> audio (song swap) | `sessionLock`: the control side holds it for a pointer swap, `prepare` and `deviceStopped`; the audio side only try-locks |
@@ -162,7 +162,7 @@ none, so an underrun is silence plus a re-buffer, never skew.
 **Obligations for what plugs in.**
 - The stem mix stage (`StemMixStage`, `dsp::MixProcessor`) obeys the callback rules: allocate in
   `prepare()` only; read parameters from the snapshot; publish levels through atomics.
-- Phase 5 visuals read `MeterStore` and the post-fader stem tap through lock-free snapshots; the
+- The reactive visuals read `MeterStore` and the post-fader stem tap through lock-free snapshots; the
   renderer must never call into the engine, wait on the audio thread, or hold anything the
   callback needs.
 - Anything that allocates or waits (opening files, planning, logging, UI) stays on the message
@@ -175,7 +175,7 @@ thread acts as the audio thread and drives the callback through: every stem-only
 stereo and mono output, six resampling ratios (44.1/48/96/192 kHz to 48/44.1/96 kHz), Original/Stem
 Mix toggling and the crossfade, looping and the end-of-song tail, 150 random seeks, pauses, stops
 and loop toggles, starvation and re-buffering, idle states (no song, paused, after a device
-stop), and the Phase 4 `MixProcessor` installed through `setMixStageFactory` with live parameter
+stop), and the mix's `MixProcessor` installed through `setMixStageFactory` with live parameter
 writes. Any allocation or release fails the test. The same run records which threads call
 `FrameSource::read` and which log: neither may be the callback thread. Inserting an allocation
 into the render path makes it fail (checked when the audit was written).
@@ -184,7 +184,7 @@ Not covered by the audit: execution time (no deadline measurement), page faults,
 absence of blocking locks and waits, which rest on code review (`process` has one `tryEnter` and
 no other synchronisation primitive). A new audio-thread path needs a scenario added to the audit.
 
-## The interactive mix (Phase 4, `src/dsp/`)
+## The interactive mix (`src/dsp/`)
 
 `dsp::MixProcessor` turns the four aligned stems into one limited stereo mix. It runs at the
 **source** sample rate (44.1 to 192 kHz), before the single resampler, and its three audio-facing
@@ -274,7 +274,7 @@ with a write. Every audible parameter ramps to the new snapshot, so changing con
 click. `process`, `reset` and `meters().read()` allocate nothing and take no locks; `prepare`
 allocates.
 
-**Metering and the Phase 5 hooks**
+**Metering and the hooks for the visuals**
 - `meters()` returns a `MeterStore`: per stem the post-filter, post-fader, post-pan **peak** and
   **RMS**, the source-rate master peak and RMS, `limiterInputPeak` and `limiterReductionDb`. The
   final device limiter's additional reduction is not part of this snapshot. One audio-thread
@@ -320,7 +320,7 @@ allocates.
 `DspStressTests` reuses the allocation counter that `AudioCallbackAuditTests.cpp` installs for the
 whole test executable (it declares the counter `extern`), so it must not define its own.
 
-## The mix in the app (Phase 4 integration)
+## The mix in the app
 
 - `MixService` (owned by `AudioService`, outliving the engine) holds the app's one
   `dsp::ParameterStore` and installs a production `StemMixStage` adapter with
@@ -367,7 +367,7 @@ written anywhere: `settings.json` keeps only `format`, `version`, `forceCpu`, `a
 stress and solo tests, and the workload switch (`SNDS_HEAVY_TESTS`, `tests/cpp/DspHeavy.h`) are in
 [Testing](testing.md).
 
-## Reactive artwork and fullscreen (Phase 5, `src/rendering/`, `src/dsp/VisualAnalysis.*`)
+## Reactive artwork and fullscreen (`src/rendering/`, `src/dsp/VisualAnalysis.*`)
 
 The artwork in the player moves with the mix, and a failure of the graphics side never reaches
 audio. The path is one way: the audio thread publishes numbers, the message thread turns them into
@@ -466,7 +466,7 @@ transport bar are untouched.
 (`SNDS_RENDER_GL_TESTS=1`, and `SNDS_RENDER_FULLSCREEN_TESTS=1` for a real kiosk window, which covers
 the display briefly): run with `snds_tests --filter Render` / `--filter "Visual panel"`.
 
-## Error taxonomy (Phase 6, `app/ErrorReport`)
+## Error taxonomy (`app/ErrorReport`)
 
 One model turns every failure into the same shape: **message** (one sentence), **guidance** (the
 next step), **actions** (`RecoveryKind`: re-check, try again, retry on CPU, choose another file,
@@ -484,13 +484,13 @@ actions out. The renderer reports through
 `MainComponent::reportRendererFallback(RendererFallbackInfo{from, to, cause, detail})`, with the
 tier names and `rendering::causeName` text, which shows a dismissable notice and logs it.
 
-## Progress and the ready notification (Phase 6, `app/ProgressText`)
+## Progress and the ready notification (`app/ProgressText`)
 
 - The worker's `etaSeconds` is for the current step only (separation, after 5 % and 5 s). The progress line says "about X left in this step" and adds the time elapsed so far; it never presents a total. `credibleEta` drops missing, non-finite, under 1 s, over 6 h, and cancelling values.
 - `SessionStatus::justPrepared` is set only in the status published after the worker finished a song. The panel then shows Play (over Cancel) and the window's taskbar button flashes if SNDS is not the active window (`WindowAttention`). A library open says it was already prepared and does not flash.
 - Opening a prepared song needs no worker: `ImportPanel::setOpenAllowed` depends only on the session being idle, while Import also needs a ready worker.
 
-## Recent songs (Phase 6, `app/RecentSongs`, `ui/RecentList`)
+## Recent songs (`app/RecentSongs`, `ui/RecentList`)
 
 - `settings.json` holds up to 20 references under `recentSongs`: cache key, title, and the last place the original was seen. No mix, playhead or playback state is stored. Entries whose key is not a plain folder name are dropped on load.
 - `MainComponent` records a song every time one opens (library, import, or locate), newest first. When an open cannot find the original, the earlier path is kept.
@@ -498,23 +498,23 @@ tier names and `rendering::causeName` text, which shows a dismissable notice and
 - Locate on a prepared song opens it and lets `SongSession::locateOriginal` check the file's size and SHA-256; on an unprepared song it imports the chosen file. Remove only forgets the reference; it never touches the cache (cache management is a separate screen).
 - The list shows recents only. Songs prepared before this feature appear again once they are opened or imported (an import of a prepared file is a cache hit, not a new preparation).
 
-## The song cache view (Phase 6, `ui/CacheDialog`, `app/CacheOverview`)
+## The song cache view (`ui/CacheDialog`, `app/CacheOverview`)
 
 - **Song cache...** in the header opens a window listing every folder in the cache: playable songs (length, size, prepared date), incompatible entries (made by another version) and damaged ones, with the reason. The summary shows how many songs there are, the space the cache uses, and the temporary job folders.
 - Open works for any playable cached song, whether or not it is in the recent list; the window closes and the song opens from the cache without a worker. Delete removes one entry; Clear cache removes all of them. Deleting a playable song and clearing both ask first; deleting an unusable entry does not. There is no automatic eviction.
 - Deleting the open song, or clearing, first calls `SongSession::closeSong`, which drops the open song and fires `onSongClosed`; `MainComponent` then unloads the player, song panel and mix panel, so Windows holds no file of the folder. The deletion itself runs on a background thread. A failure (a locked file) is shown in the window; an entry that was only partly removed is no longer playable (song.json goes first) and can be deleted again.
 - While a song is being prepared or opened, or a deletion runs, Open, Delete and Clear are disabled. Job folders are never touched by Clear; abandoned ones are still cleaned at startup.
 
-## Diagnostics export (Phase 6, `app/DiagnosticsExport`, `scripts/diagnostics.ps1`)
+## Diagnostics export (`app/DiagnosticsExport`, `scripts/diagnostics.ps1`)
 
 - **Export diagnostics...** in the header (and as an action on failures that already offer Open logs: worker crash, separation, validation, internal, published-invalid, and a song that cannot be loaded) asks where to save, then writes `snds-diagnostics-<time>.zip` on a background thread (temporary file, then rename) and reveals it. The app never uploads anything.
 - The zip holds `diagnostics.txt` and `logs\<name>` (the last 256 KB of each log file, from a line start). `diagnostics.txt` uses the same `## Section` layout as the script. Shared sections: System, Data directories, Model, Worker environment (the readiness output with the worker, protocol and torch versions), Settings, Cache, Logs. App only: Application (SNDS and JUCE versions, build, worker root), Renderer (the visuals status line), Audio device (state, device names, rate, buffer). Script only: Source, Toolchain, App build.
 - **Redaction.** Every line, and every log, goes through `PathRedactor`, the same rule as the logs and `Protect-Path`: the user profile and local app data paths read `%USERPROFILE%` and `%LOCALAPPDATA%`. The computer name and user name are never collected.
 - **Settings are written from known fields only** (CPU only, whether an output device was chosen, recent songs), so a field this version does not know about is never copied. The script prints other keys by name only. No song audio, artwork or cache files are included, only the cache's keys (first 12 characters), sizes, status and file names.
 
-`--export-diagnostics <zip>` is an automation flag like `--open-song`: after the first readiness check and 3 seconds it writes the same zip as the header button, without a dialog, and quits. The Phase 6 validation results are in [Testing](testing.md#phase-6-the-whole-journey-2026-10-06).
+`--export-diagnostics <zip>` is an automation flag like `--open-song`: after the first readiness check and 3 seconds it writes the same zip as the header button, without a dialog, and quits. The end-to-end validation results are in [Testing](testing.md#the-whole-journey-2026-10-06).
 
-## Release content check and test-suite time (Phase 7)
+## Release content check and test-suite time
 
 - **`scripts\check-source-archive.ps1`** runs `git archive` of HEAD into a temporary zip and fails if the archive holds model weights (`.th`, `.pt`, `.pth`, `.ckpt`, `.safetensors`, `.onnx`, ...), audio outside `testdata\` (or in it but not named in `testdata\README.md`), build outputs and local folders (`build`, `.venv`, `__pycache__`, `logs`, `cache`, ...), logs, `plan.md` and `decisions.md`, local settings, files over 5 MB, absolute user paths in text files (`C:\Users\<name>`, this machine's profile or app data folder, a user name inside a path), or secret-looking strings (private keys, GitHub, AWS, Slack, Hugging Face and `sk-` tokens, quoted passwords or keys outside the test folders). It prints the file count and sizes. `windows.yml` runs it first. `-WorkingTree` checks what the next commit would hold (tracked files as on disk plus new unignored files, through a temporary index) so a fix can be verified before it is committed. The redaction tests use made-up users (`Pat`, `Patty`, `x`); the script treats those and Windows' own folders as placeholders.
 - **Suite time.** `SNDS_TEST_TIMES=1 snds_tests` lists every test's wall time at the end, slowest first. The default run uses reduced workloads (`tests/cpp/DspHeavy.h`; `SNDS_HEAVY_TESTS=1` runs the full ones), and `ctest` runs the suite as four shards (`snds_tests --shard <i>/4`) in parallel processes (`scripts\test.ps1` passes `--parallel 4`), with the slowest suites dealt out one per shard. A run with no argument still runs everything in one process. Timing limits that depend on the scheduler (the slowest audio block, message-thread gaps in the visual contention tests) repeat once before they fail, because a busy machine can trip them without a bug.

@@ -2,7 +2,7 @@
 
 SNDS has automated suites that run without the model, opt-in suites that use the real worker,
 GPU, or audio device, and a manual checklist for the things only a person can judge. This page
-lists them, records what was measured, and keeps the validation results by phase.
+lists them, records what was measured, and keeps the validation results.
 
 ## Run the automated suites
 
@@ -68,7 +68,7 @@ separation worker, but identity verification now reads the full original before 
 
 Measured on 2026-10-06 on one development laptop: Intel Core i5-13500H (12 cores, 16 threads),
 32 GB RAM, NVIDIA RTX 4050 Laptop GPU (driver 560.94, CUDA 12.1), Windows 11. **This is not the
-six-core, 16 GB machine the plan names as the CPU baseline**; that machine has not been measured,
+target CPU baseline, a six-core machine with 16 GB RAM**; that machine has not been measured,
 so treat the CPU figures as a best case.
 
 | What | Result |
@@ -99,25 +99,25 @@ and record the result and the machine. "Evidence" says what has been done so far
 
 | Check | What to do | Evidence |
 |---|---|---|
-| Clean CPU setup | Follow the README on a clean CPU-only machine, reach playback | Clone, bootstrap, build and the e2e journey run on the development laptop (Phase 6). Not yet run on a separate clean machine |
-| Clean CUDA setup | Same on a clean NVIDIA machine | GPU separation, forced CPU, and CPU retry run on the development laptop (Phase 6). Not yet run on a separate clean machine |
+| Clean CPU setup | Follow the README on a clean CPU-only machine, reach playback | Clone, bootstrap, build and the e2e journey run on the development laptop. Not yet run on a separate clean machine |
+| Clean CUDA setup | Same on a clean NVIDIA machine | GPU separation, forced CPU, and CPU retry run on the development laptop. Not yet run on a separate clean machine |
 | Import formats | PCM, float, mono, stereo, high-rate WAV and an MP3 | Automated for the validator and the fixtures. Not yet done by hand |
 | Artwork flow | Embedded MP3 art, manual replacement, no art (generated cover), readable palette | Not yet done by hand |
 | Separation quality | Listen to several genres and note the `htdemucs` artifacts | Not yet done |
-| Cancel at every stage | Cancel at each reported stage; no process left, no partial cache | Automated against the real worker (Phase 6); not inspected by hand |
+| Cancel at every stage | Cancel at each reported stage; no process left, no partial cache | Automated against the real worker; not inspected by hand |
 | Long playback | Play and seek through a long track; watch drift, memory, disk, dropouts | Automated up to 12 minutes (`SNDS_VALIDATE_LONG`); not done by ear on a long song |
 | Device matrix | Switch devices, sample rates and buffer sizes; unplug and replug | Automated with simulated devices; not done on real hardware |
 | Mix stress | Move gain, pan, cuts, sends, tempo, delay division and A/B quickly | Automated (`Phase4Stress`); not done by hand |
 | Visual stress | Full effects and fullscreen with forced fallbacks (`SNDS_RENDER=...`) while stressing audio | Automated; not done by eye |
 | Cache recovery | Move or edit the original, locate it, corrupt a stem, clear the cache | Automated; not done by hand |
-| Diagnostics review | Export a bundle, read it, check the redaction | Run once against the real app (Phase 6); the review for usefulness is open |
+| Diagnostics review | Export a bundle, read it, check the redaction | Run once against the real app; the review for usefulness is open |
 
 A box is only "done" when someone ran it. Until every row has a result, the alpha is not signed
 off.
 
-## Validation results by phase
+## Validation results
 
-### Phase 3: transport and playback (`tests/cpp/Phase3ValidationTests.cpp`)
+### Transport and playback (`tests/cpp/Phase3ValidationTests.cpp`)
 
 Default suite (about 11 s): a 90 s song plays through bit-exact with A/B toggles; 60 seeks verify
 every stem from the target frame; 50 loop laps and 120 pause/resume cycles stay in order; a
@@ -138,7 +138,7 @@ Those historical measurements predate the final device-output limiter. The curre
 validator compares direct file reads with the expected transport fade and final limiter applied,
 so loud input can be reduced while frame alignment is still checked exactly.
 
-### Phase 4: the mix
+### The mix
 
 - **Ephemeral mix.** `settings.json` keeps only `format`, `version`, `forceCpu`, `audioDevice` and
   `recentSongs`; `song.json` changes only in `bpm.userOverride`; and no parameter ID appears in any
@@ -154,7 +154,7 @@ so loud input can be reduced while frame alignment is still checked exactly.
   different levels, give exactly `stemAudibility` in the real output (96 combinations; all 256
   with `SNDS_HEAVY_TESTS=1`); Reset mix clears them.
 
-### Phase 5: artwork and fullscreen
+### Artwork and fullscreen
 
 The renderer ladder (GPU, CPU, static), capability detection, frame pacing, and the hung-driver
 handling are covered by the `Render` and `Visual panel` groups; see
@@ -163,7 +163,7 @@ Real-GPU and kiosk-window checks are opt-in (`SNDS_RENDER_GL_TESTS`,
 `SNDS_RENDER_FULLSCREEN_TESTS`). Force a fallback by hand with `SNDS_RENDER` (a comma list; see the
 architecture notes).
 
-### Phase 6: the whole journey (2026-10-06)
+### The whole journey (2026-10-06)
 
 Everything ran against the real worker with a temporary `SNDS_HOME`; nothing touched
 `%LOCALAPPDATA%\snds`, nothing was played (`--no-audio`), and the owner track and its excerpt were
@@ -182,7 +182,7 @@ whole number (`String (x, 0)` is not "zero decimals"), and a failed attempt's jo
 behind after a successful retry. The excerpt used is `testdata\asking42much-excerpt.wav` (10 s);
 the real track was not copied.
 
-### Phase 7: the README followed from scratch (2026-10-07)
+### The README followed from scratch (2026-10-07)
 
 A fresh `git clone` of `85e19e4` into a temporary folder, a temporary `SNDS_HOME`, and only
 `README.md`, `docs/setup.md`, `docs/user-guide.md`, `docs/diagnostics.md` and this page.

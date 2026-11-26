@@ -1,4 +1,4 @@
-// Phase 3 validation: long-song sync, the device-rate matrix, device recovery, streaming memory,
+// Transport and playback validation: long-song sync, the device-rate matrix, device recovery, streaming memory,
 // and (opt-in) the real owner-track package. All offline: the engine is driven without a device,
 // or through a simulated one. Nothing here opens real audio hardware.
 //

@@ -9,7 +9,7 @@
 
 #include <functional>
 
-// Opt-in Phase 6 journey checks against the REAL worker (category "snds-e2e"; run
+// Opt-in whole-journey checks against the REAL worker (category "snds-e2e"; run
 // `snds_tests --e2e`). Same environment as EndToEndTests.cpp:
 //   SNDS_E2E_HOME   a scratch SNDS_HOME with both checkpoints under models\ (also set as SNDS_HOME)
 //   SNDS_E2E_TRACK  an audio file; only read. Short excerpts of it are made in a scratch folder.
@@ -71,7 +71,7 @@ class Phase6JourneyTests final : public juce::UnitTest
 {
 public:
     Phase6JourneyTests()
-        : juce::UnitTest ("Phase 6 journey with the real worker", "snds-e2e")
+        : juce::UnitTest ("Whole journey with the real worker", "snds-e2e")
     {
     }
 

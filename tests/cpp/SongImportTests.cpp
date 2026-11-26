@@ -320,7 +320,7 @@ private:
         expectWithinAbsoluteError (result.info.sampleRate, 44100.0, 1.0e-6);
 
         // libsndfile 1.2.0 reports 22050 frames for this file (it applies the LAME gapless header).
-        // The difference below is the encoder delay/padding the Phase 3+ alignment must account for.
+        // The difference below is the encoder delay/padding the playback alignment must account for.
         constexpr juce::int64 libsndfileFrames = 22050;
         logMessage ("MP3 fixture: JUCE decoded " + juce::String (result.info.frames) + " frames, libsndfile "
                     + juce::String (libsndfileFrames) + " (difference "

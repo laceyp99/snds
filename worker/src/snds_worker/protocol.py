@@ -7,6 +7,7 @@ stdout without filtering.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import sys
@@ -48,6 +49,9 @@ def ensure_standard_streams() -> None:
 
 
 def emit(payload: dict[str, Any]) -> None:
+    # Text-mode stdout turns "\n" into "\r\n" on Windows; the protocol ends lines with "\n" only.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(newline="\n")
     sys.stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
     sys.stdout.flush()
 
